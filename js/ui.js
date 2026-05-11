@@ -4,6 +4,7 @@ import { CONFIG, ERAS, TERRAIN } from "./config.js";
 import { applyBrush, disaster } from "./god.js";
 import { CELL_DEFS } from "./cell.js";
 import { SPECIES } from "./animal.js";
+import { HUMAN_OUTPUT_NAMES, ANIMAL_OUTPUT_NAMES } from "./brain.js";
 
 const TERRAIN_NAMES = {
   [TERRAIN.GRASS]: "Grass",
@@ -14,6 +15,38 @@ const TERRAIN_NAMES = {
   [TERRAIN.LAVA]: "Lava",
   [TERRAIN.DIRT]: "Dirt",
 };
+
+/** Render the brain's most-recent outputs and a strip of hidden-neuron
+ *  activations. Returns a small HTML fragment that the inspector can
+ *  splice into its panel. */
+function renderBrain(brain, outputNames) {
+  if (!brain) return "";
+  const out = brain.lastOutputs;
+  const hidden = brain.hidden;
+  const outRow = outputNames.map((name, i) => {
+    const v = out ? out[i] : 0;
+    const sign = v >= 0 ? "pos" : "neg";
+    const w = Math.min(100, (Math.abs(v) * 100) | 0);
+    return `<div class="bn-row"><span class="bn-lbl">${name}</span>` +
+      `<span class="bn-bar"><span class="bn-fill ${sign}" style="width:${w}%"></span></span>` +
+      `<span class="bn-val">${v.toFixed(2)}</span></div>`;
+  }).join("");
+  const neurons = Array.from(hidden).map((v) => {
+    const a = Math.min(1, Math.abs(v));
+    const hue = v >= 0 ? 140 : 0; // green for excitation, red for inhibition
+    return `<span class="bn-neuron" style="background:hsl(${hue} 70% ${20 + a * 45}%)" title="${v.toFixed(2)}"></span>`;
+  }).join("");
+  return `
+    <div class="brain">
+      <div class="brain-head">
+        <span class="label">Brain</span>
+        <span class="muted">${brain.inSize}→${brain.hidSize}→${brain.outSize} · act ${brain.activation.toFixed(2)}</span>
+      </div>
+      <div class="bn-neurons">${neurons}</div>
+      <div class="bn-out">${outRow}</div>
+    </div>
+  `;
+}
 
 export class UI {
   constructor(game) {
@@ -154,6 +187,7 @@ export class UI {
       const def = SPECIES[a.species];
       html += `<div><span class="label">Animal</span> ${def.name} ${def.carnivore ? "(predator)" : "(prey)"} · age ${a.age}/${a.lifespan}</div>`;
       html += `<div class="gene-row"><span>spd ${a.genes.speed.toFixed(2)}</span><span>str ${a.genes.strength.toFixed(2)}</span><span>vis ${a.genes.vision.toFixed(2)}</span><span>fert ${a.genes.fertility.toFixed(2)}</span></div>`;
+      html += renderBrain(a.brain, ANIMAL_OUTPUT_NAMES);
     }
     if (info.human) {
       const h = info.human;
@@ -167,6 +201,10 @@ export class UI {
           html += `<div class="muted">carrying w${c.wood} s${c.stone} i${c.iron}</div>`;
         }
       }
+      if (h.task) {
+        html += `<div class="muted">doing: ${h.task.kind}</div>`;
+      }
+      html += renderBrain(h.brain, HUMAN_OUTPUT_NAMES);
     }
     if (info.building) {
       html += `<div><span class="label">Building</span> ${info.building.kind} of ${info.building.kingdom.culture} ${info.building.kingdom.name}</div>`;

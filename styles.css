@@ -509,3 +509,82 @@ canvas {
 button[data-tool] {
   text-align: left;
 }
+
+/* Brain inspector — small neural-net visualisation for humans/animals. */
+.brain {
+  margin-top: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--panel);
+}
+
+.brain .brain-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 4px;
+  font-size: 11px;
+}
+
+.bn-neurons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  margin: 3px 0 5px;
+}
+
+.bn-neuron {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 1px solid rgba(0, 0, 0, 0.4);
+  box-shadow: 0 0 4px rgba(86, 194, 114, 0.0);
+  flex: none;
+}
+
+.bn-out {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.bn-row {
+  display: grid;
+  grid-template-columns: 60px 1fr 36px;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.bn-lbl {
+  color: var(--muted);
+}
+
+.bn-bar {
+  position: relative;
+  height: 5px;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.bn-fill {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+}
+
+.bn-fill.pos {
+  background: var(--accent);
+}
+
+.bn-fill.neg {
+  background: var(--danger);
+}
+
+.bn-val {
+  text-align: right;
+  color: var(--text);
+}
