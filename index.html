@@ -13,6 +13,7 @@
         <header>
           <h1>EvoKingdoms</h1>
           <p class="tag">Life · Evolution · Kingdoms</p>
+          <button id="btn-help" class="help-btn" title="How to play">?</button>
         </header>
 
         <section class="block">
@@ -96,7 +97,43 @@
         <canvas id="canvas"></canvas>
         <div id="hover" class="hover-tag"></div>
         <div id="toast" class="toast"></div>
+        <div id="event-log" class="event-log"></div>
       </main>
+    </div>
+
+    <div id="help-overlay" class="overlay hidden">
+      <div class="overlay-card">
+        <button id="btn-help-close" class="overlay-close" aria-label="Close">×</button>
+        <h2>How to play</h2>
+        <p class="muted">
+          EvoKingdoms is a small living world. Watch organisms evolve from a
+          handful of cells, then guide humans, kingdoms and wars into being.
+        </p>
+        <h3>Eras</h3>
+        <ol>
+          <li><b>Primordial</b> — only single-cell organisms exist. Producers
+            make food, mouths eat it, movers crawl, eyes see, killers kill, armor
+            protects. Every reproduction mutates a copy.</li>
+          <li><b>Sentient</b> — once an organism reaches enough cells (or you
+            press <b>Advance Era</b>), humans awaken. They forage, reproduce,
+            found kingdoms, build villages → towns → castles, and wage war.</li>
+        </ol>
+        <h3>Controls</h3>
+        <ul>
+          <li>Pick a <b>Tool</b> then click / drag on the world.</li>
+          <li>Press <b>Inspect</b> + click to read a tile's full info.</li>
+          <li>Trigger <b>Disasters</b> for chaos. The world remembers.</li>
+          <li>Use the <b>Speed</b> slider to fast-forward eras.</li>
+        </ul>
+        <h3>Tips</h3>
+        <ul>
+          <li>Paint a small lake with the <b>Water</b> brush — coastline life
+            tends to be more interesting.</li>
+          <li>Drop <b>Food</b> on starving colonies to nurture them.</li>
+          <li>Surround a kingdom with mountains to slow its expansion.</li>
+        </ul>
+        <p class="muted">Inspired by <i>The Life Engine</i> and <i>Super WorldBox</i>.</p>
+      </div>
     </div>
 
     <script type="module" src="js/main.js"></script>

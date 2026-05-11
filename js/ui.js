@@ -52,6 +52,23 @@ export class UI {
 
     $("btn-era-advance").addEventListener("click", () => this.game.world.enterSentientEra());
 
+    const helpOverlay = $("help-overlay");
+    const showHelp = () => helpOverlay.classList.remove("hidden");
+    const hideHelp = () => helpOverlay.classList.add("hidden");
+    $("btn-help").addEventListener("click", showHelp);
+    $("btn-help-close").addEventListener("click", hideHelp);
+    helpOverlay.addEventListener("click", (e) => {
+      if (e.target === helpOverlay) hideHelp();
+    });
+    window.addEventListener("keydown", (e) => {
+      if (e.key === "?" || e.key === "/") showHelp();
+      else if (e.key === "Escape") hideHelp();
+      else if (e.key === " ") {
+        e.preventDefault();
+        document.getElementById("btn-pause").click();
+      }
+    });
+
     for (const btn of document.querySelectorAll(".tool")) {
       btn.addEventListener("click", () => {
         this.tool = btn.dataset.tool;
