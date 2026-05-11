@@ -1,4 +1,11 @@
 // Humans, tribes, kingdoms, religion, genes, real-resource economy and wars.
+//
+// Humans run a small task-based AI: each picks a role from their dominant
+// gene (warrior, scholar, priest, mother, raider, forager) and then chases
+// a target tile that satisfies the highest-priority unmet need. Walking
+// is a Chebyshev step toward the target; if blocked, the human falls
+// back to a scored 1-step wander. Kingdoms keep a shared resource
+// memory so harvesters can re-visit known wood / stone / iron tiles.
 
 import { CONFIG, TERRAIN, TERRAIN_WALKABLE } from "./config.js";
 import {
@@ -11,6 +18,24 @@ import {
 
 let humanId = 1;
 let kingdomId = 1;
+
+const ROLE_BY_DOMINANT = {
+  strength:  "warrior",
+  smarts:    "scholar",
+  faith:     "priest",
+  fertility: "mother",
+  agg:       "raider",
+};
+const TASK_TTL = {
+  eat:      80,
+  flee:     30,
+  harvest:  220,
+  deposit:  300,
+  attack:   140,
+  march:    200,
+  pray:     160,
+  wander:   28,
+};
 
 export class Human {
   constructor(x, y, kingdom = null, genes = null) {
@@ -30,6 +55,10 @@ export class Human {
     this.generation = 1;
     // What this human is currently carrying back to their kingdom's coffers.
     this.carry = { wood: 0, stone: 0, iron: 0 };
+    // AI state
+    this.role = pickRole(this.genes);
+    this.task = null;          // { kind, tx, ty, ttl }
+    this.thinkCooldown = randInt(0, 20);
   }
 
   carryTotal() {
@@ -48,44 +77,275 @@ export class Human {
       return;
     }
 
-    // forage / hunt
-    if (this.hunger < 1.4 && this.tryEat(world)) {
-      // ate
-    } else if (this.moveCooldown-- <= 0) {
-      this.moveCooldown = CONFIG.HUMAN_MOVE_INTERVAL;
-      this.moveStep(world);
+    // 1. Share what we see with the kingdom (cheap, every few ticks).
+    if (this.kingdom && (((this.id + world.tick) & 7) === 0)) {
+      this.shareVision(world);
     }
 
-    // gather adjacent resources (real harvesting)
+    // 2. Pick / refresh a task.
+    if (this.thinkCooldown-- <= 0 || !this.task || this.task.ttl <= 0) {
+      this.pickTask(world);
+      this.thinkCooldown = 20 + randInt(0, 10);
+    } else if (this.task) {
+      this.task.ttl--;
+    }
+
+    // 3. Eat anything tasty in reach.
+    if (this.hunger < 1.4) this.tryEat(world);
+
+    // 4. Harvest adjacent resources (cheap free-action while passing through).
     if (this.kingdom && this.carryTotal() < CONFIG.HUMAN_CARRY_MAX) {
       this.tryHarvest(world);
     }
 
-    // deposit at any owned building (capital counts) when carrying anything
+    // 5. Deposit at home / building when standing next to it.
     if (this.kingdom && this.carryTotal() > 0) this.tryDeposit(world);
 
-    // attempt reproduction (fertility gene biases chance)
+    // 6. Move toward task target (or wander if no target).
+    if (this.moveCooldown-- <= 0) {
+      this.moveCooldown = CONFIG.HUMAN_MOVE_INTERVAL;
+      this.moveStep(world);
+    }
+
+    // 7. Reproduce when well-fed; fertility gene biases this.
     if (this.hunger >= CONFIG.HUMAN_REPRODUCE_AT && chance(0.0035 + 0.006 * this.genes.fertility)) {
       this.tryReproduce(world);
     }
 
-    // attempt to build something for the kingdom
+    // 8. Builders try to raise a building when standing in their kingdom.
     if (this.kingdom && --this.buildCooldown <= 0) {
       this.buildCooldown = CONFIG.HUMAN_BUILD_INTERVAL + randInt(-30, 60);
       this.kingdom.maybeBuild(world, this);
     }
 
-    // attempt to claim or join a kingdom
+    // 9. Tribeless: try to find or found a kingdom.
     if (!this.kingdom) this.maybeJoinOrFoundKingdom(world);
 
-    // war combat
+    // 10. Warrior / raider tasks already direct them to the enemy.
+    //     Attacks happen when standing next to one.
     if (this.kingdom && this.kingdom.warTarget) {
       this.maybeAttackEnemy(world);
     }
   }
 
+  /** Note nearby resource tiles for the kingdom's shared memory. */
+  shareVision(world) {
+    const k = this.kingdom;
+    if (!k) return;
+    const R = 3;
+    for (let dy = -R; dy <= R; dy++) {
+      for (let dx = -R; dx <= R; dx++) {
+        const nx = this.x + dx;
+        const ny = this.y + dy;
+        if (!world.inBounds(nx, ny)) continue;
+        const idx = world.idx(nx, ny);
+        if (world.hasWood(nx, ny))  k.knownWood.add(idx);
+        if (world.hasStone(nx, ny)) k.knownStone.add(idx);
+        if (world.hasIron(nx, ny))  k.knownIron.add(idx);
+      }
+    }
+  }
+
+  /** Decide what to do next based on need × role priorities. */
+  pickTask(world) {
+    // 0. Flee predator within 4 tiles. Warriors stand and fight instead.
+    const pred = this.findNearest(world, 4, (x, y) => {
+      const a = world.animalAtTile(x, y);
+      return a && a.alive && a.isCarnivore();
+    });
+    if (pred) {
+      if (this.role === "warrior" && this.genes.strength > 0.45) {
+        this.task = { kind: "attack", tx: pred[0], ty: pred[1], ttl: 30 };
+        return;
+      }
+      // Flee opposite direction.
+      const fx = clamp(this.x - (pred[0] - this.x) * 3, 0, world.W - 1);
+      const fy = clamp(this.y - (pred[1] - this.y) * 3, 0, world.H - 1);
+      this.task = { kind: "flee", tx: fx, ty: fy, ttl: TASK_TTL.flee };
+      return;
+    }
+
+    // 1. Hungry: find food.
+    if (this.hunger < 0.75) {
+      const t = this.findNearest(world, 12, (x, y) => world.hasFood(x, y));
+      if (t) {
+        this.task = { kind: "eat", tx: t[0], ty: t[1], ttl: TASK_TTL.eat };
+        return;
+      }
+    }
+
+    // 2. Carrying full: head home to deposit.
+    if (this.kingdom && this.carryTotal() >= CONFIG.HUMAN_CARRY_MAX) {
+      const home = this.kingdom.depositTarget(this);
+      this.task = { kind: "deposit", tx: home.x, ty: home.y, ttl: TASK_TTL.deposit };
+      return;
+    }
+
+    // 3. At war + warrior/raider: hunt enemy citizens.
+    if (this.kingdom && this.kingdom.warTarget && (this.role === "warrior" || this.role === "raider")) {
+      const enemy = this.kingdom.warTarget;
+      const t = this.findNearest(world, 14, (x, y) => {
+        const h = world.humanAt[world.idx(x, y)];
+        return !!(h && h.alive && h.kingdom === enemy);
+      });
+      if (t) {
+        this.task = { kind: "attack", tx: t[0], ty: t[1], ttl: TASK_TTL.attack };
+        return;
+      }
+      this.task = { kind: "march", tx: enemy.capital.x, ty: enemy.capital.y, ttl: TASK_TTL.march };
+      return;
+    }
+
+    // 4. Priest: pray at the nearest shrine (small piety boost).
+    if (this.role === "priest" && this.kingdom) {
+      const shrine = this.kingdom.buildings.find((b) => b.kind === "shrine");
+      if (shrine) {
+        this.task = { kind: "pray", tx: shrine.x, ty: shrine.y, ttl: TASK_TTL.pray };
+        return;
+      }
+    }
+
+    // 5. Harvester / forager / scholar / mother / raider all gather
+    //    resources when not otherwise occupied. Need-based: kingdom decides
+    //    which resource is rarest right now.
+    if (this.kingdom && this.carryTotal() < CONFIG.HUMAN_CARRY_MAX) {
+      const need = this.kingdom.mostNeededResource();
+      const known = (
+        need === "wood" ? this.kingdom.knownWood :
+        need === "stone" ? this.kingdom.knownStone :
+        this.kingdom.knownIron
+      );
+      // Prefer known tiles from kingdom memory.
+      const tile = this.pickClosestKnown(world, known);
+      if (tile) {
+        this.task = { kind: "harvest", tx: tile[0], ty: tile[1], ttl: TASK_TTL.harvest };
+        return;
+      }
+      // Fallback: scout for any unknown resource tile in vision.
+      const scan = this.findNearest(world, 10, (x, y) => (
+        (need === "wood"  && world.hasWood(x, y))  ||
+        (need === "stone" && world.hasStone(x, y)) ||
+        (need === "iron"  && world.hasIron(x, y))
+      ));
+      if (scan) {
+        this.task = { kind: "harvest", tx: scan[0], ty: scan[1], ttl: TASK_TTL.harvest };
+        return;
+      }
+    }
+
+    // 6. Default: wander within own territory.
+    if (this.kingdom) {
+      const tx = this.kingdom.capital.x + randInt(-8, 8);
+      const ty = this.kingdom.capital.y + randInt(-8, 8);
+      this.task = { kind: "wander", tx, ty, ttl: TASK_TTL.wander };
+    } else {
+      this.task = { kind: "wander", tx: this.x + randInt(-4, 4), ty: this.y + randInt(-4, 4), ttl: TASK_TTL.wander };
+    }
+  }
+
+  /** Walk one tile (8-connected) toward the task target. Falls back to
+   *  a scored 1-step wander if blocked or no task. */
+  moveStep(world) {
+    const t = this.task;
+    if (t && t.tx >= 0 && t.ty >= 0) {
+      const sdx = Math.sign(t.tx - this.x);
+      const sdy = Math.sign(t.ty - this.y);
+      if (sdx === 0 && sdy === 0) {
+        // arrived
+        this.task.ttl = Math.min(this.task.ttl, 4);
+        return;
+      }
+      const cands = [
+        [sdx, sdy],
+        [sdx, 0],
+        [0, sdy],
+        [sdx, -sdy],
+        [-sdx, sdy],
+        [-sdx, 0],
+        [0, -sdy],
+        [-sdx, -sdy],
+      ];
+      for (const [dx, dy] of cands) {
+        if (dx === 0 && dy === 0) continue;
+        const nx = this.x + dx;
+        const ny = this.y + dy;
+        if (!world.canHumanStand(nx, ny)) continue;
+        const a = world.animalAtTile(nx, ny);
+        if (a && a.alive && a.isCarnivore() && this.role !== "warrior") continue;
+        world.setHumanAt(this.x, this.y, null);
+        this.x = nx;
+        this.y = ny;
+        world.setHumanAt(this.x, this.y, this);
+        return;
+      }
+      // blocked — clear task; next think will repick
+      this.task = null;
+    }
+    // No target — scored 1-step wander.
+    let best = null;
+    let bestScore = -Infinity;
+    for (const [dx, dy] of NEIGHBORS_8) {
+      const nx = this.x + dx;
+      const ny = this.y + dy;
+      if (!world.canHumanStand(nx, ny)) continue;
+      let score = rand() * 0.3;
+      if (world.hasFood(nx, ny)) score += 1.5;
+      const aHere = world.animalAtTile(nx, ny);
+      if (aHere && aHere.isCarnivore() && this.role !== "warrior") score -= 2.5;
+      if (this.kingdom && world.kingdomAtTile(nx, ny) === this.kingdom.id) score += 0.3;
+      if (score > bestScore) { bestScore = score; best = [nx, ny]; }
+    }
+    if (best) {
+      world.setHumanAt(this.x, this.y, null);
+      this.x = best[0];
+      this.y = best[1];
+      world.setHumanAt(this.x, this.y, this);
+    }
+  }
+
+  /** Scan an n×n window for the first tile that satisfies `predicate`,
+   *  return [x, y] of the geometrically closest. */
+  findNearest(world, radius, predicate) {
+    let best = null;
+    let bestD = Infinity;
+    for (let dy = -radius; dy <= radius; dy++) {
+      for (let dx = -radius; dx <= radius; dx++) {
+        const nx = this.x + dx;
+        const ny = this.y + dy;
+        if (!world.inBounds(nx, ny)) continue;
+        if (!predicate(nx, ny)) continue;
+        const d = dx * dx + dy * dy;
+        if (d < bestD) { bestD = d; best = [nx, ny]; }
+      }
+    }
+    return best;
+  }
+
+  /** Pick the closest tile-index from a Set, verifying the resource
+   *  still exists (lazy GC on the kingdom's memory). */
+  pickClosestKnown(world, set) {
+    if (!set || set.size === 0) return null;
+    let best = null;
+    let bestD = Infinity;
+    let cleared = 0;
+    for (const idx of set) {
+      const x = idx % world.W;
+      const y = (idx / world.W) | 0;
+      // Cull stale memory of fully-mined tiles.
+      if (!world.hasWood(x, y) && !world.hasStone(x, y) && !world.hasIron(x, y)) {
+        set.delete(idx);
+        cleared++;
+        if (cleared > 12) break;
+        continue;
+      }
+      const d = dist2(this.x, this.y, x, y);
+      if (d < bestD) { bestD = d; best = [x, y]; }
+    }
+    return best;
+  }
+
   tryEat(world) {
-    // 1. eat food on current tile or adjacent
+    // eat food on current tile or adjacent
     for (const [dx, dy] of [[0, 0], ...NEIGHBORS_4]) {
       const nx = this.x + dx;
       const ny = this.y + dy;
@@ -94,7 +354,7 @@ export class Human {
         return true;
       }
     }
-    // 2. hunt nearby small organisms or prey animals
+    // hunt small organisms or prey animals
     for (const [dx, dy] of NEIGHBORS_8) {
       const nx = this.x + dx;
       const ny = this.y + dy;
@@ -105,98 +365,62 @@ export class Human {
         return true;
       }
       const a = world.animalAtTile(nx, ny);
-      if (a && a.alive && !a.isCarnivore() && chance(0.4 + this.genes.strength * 0.3)) {
-        a.alive = false;
-        this.hunger += CONFIG.HUMAN_EAT_GAIN * 1.6;
-        if (this.kingdom) this.kingdom.history.push({ tick: world.tick, msg: `${this.name} killed a ${a.def().name.toLowerCase()}.` });
-        return true;
+      if (a && a.alive) {
+        // warriors gore predators for food; everyone else hunts prey
+        const isPrey = !a.isCarnivore();
+        const canKill = isPrey
+          ? chance(0.4 + this.genes.strength * 0.3)
+          : (this.role === "warrior" && chance(0.18 + this.genes.strength * 0.45));
+        if (canKill) {
+          a.alive = false;
+          this.hunger += CONFIG.HUMAN_EAT_GAIN * (isPrey ? 1.6 : 1.1);
+          if (this.kingdom) {
+            this.kingdom.history.push({ tick: world.tick, msg: `${this.name} ${isPrey ? "killed" : "slew"} a ${a.def().name.toLowerCase()}.` });
+          }
+          return true;
+        }
       }
     }
     return false;
   }
 
   tryHarvest(world) {
-    // chop wood / mine stone or iron from a single neighbouring tile per tick
     if (!chance(CONFIG.HUMAN_HARVEST_CHANCE)) return;
     for (const [dx, dy] of NEIGHBORS_8) {
       const nx = this.x + dx;
       const ny = this.y + dy;
       if (!world.inBounds(nx, ny)) continue;
-      if (this.carry.wood + this.carry.stone + this.carry.iron >= CONFIG.HUMAN_CARRY_MAX) return;
-      if (world.takeWood(nx, ny)) { this.carry.wood++; return; }
-      // smarts gene lets people prefer iron over stone when both are available
-      if (this.genes.smarts > 0.55 && world.takeIron(nx, ny)) { this.carry.iron++; return; }
-      if (world.takeStone(nx, ny)) { this.carry.stone++; return; }
-      if (world.takeIron(nx, ny)) { this.carry.iron++; return; }
+      if (this.carryTotal() >= CONFIG.HUMAN_CARRY_MAX) return;
+      if (world.takeWood(nx, ny))                                     { this.carry.wood++;  return; }
+      if (this.genes.smarts > 0.55 && world.takeIron(nx, ny))         { this.carry.iron++;  return; }
+      if (world.takeStone(nx, ny))                                    { this.carry.stone++; return; }
+      if (world.takeIron(nx, ny))                                     { this.carry.iron++;  return; }
     }
   }
 
   tryDeposit(world) {
-    // any building of the same kingdom (or its capital) counts as deposit point
     const k = this.kingdom;
     if (!k) return;
     const here = (x, y) => Math.abs(this.x - x) <= 1 && Math.abs(this.y - y) <= 1;
     if (here(k.capital.x, k.capital.y)) {
-      k.resources.wood += this.carry.wood;
+      k.resources.wood  += this.carry.wood;
       k.resources.stone += this.carry.stone;
-      k.resources.iron += this.carry.iron;
+      k.resources.iron  += this.carry.iron;
       this.carry.wood = this.carry.stone = this.carry.iron = 0;
       return;
     }
     for (const b of k.buildings) {
       if (here(b.x, b.y)) {
-        k.resources.wood += this.carry.wood;
+        k.resources.wood  += this.carry.wood;
         k.resources.stone += this.carry.stone;
-        k.resources.iron += this.carry.iron;
+        k.resources.iron  += this.carry.iron;
         this.carry.wood = this.carry.stone = this.carry.iron = 0;
         return;
       }
     }
   }
 
-  moveStep(world) {
-    let best = null;
-    let bestScore = -Infinity;
-    const seekResource = !!this.kingdom && this.carryTotal() < CONFIG.HUMAN_CARRY_MAX;
-    const goingHome = !!this.kingdom && this.carryTotal() >= CONFIG.HUMAN_CARRY_MAX;
-    for (let dy = -1; dy <= 1; dy++) {
-      for (let dx = -1; dx <= 1; dx++) {
-        if (dx === 0 && dy === 0) continue;
-        const nx = this.x + dx;
-        const ny = this.y + dy;
-        if (!world.canHumanStand(nx, ny)) continue;
-        let score = rand() * 0.3;
-        if (world.hasFood(nx, ny)) score += 2;
-        if (seekResource) {
-          if (world.hasWood(nx, ny)) score += 1.5;
-          if (world.hasStone(nx, ny)) score += 1.1;
-          if (world.hasIron(nx, ny)) score += 1.3 + this.genes.smarts;
-        }
-        // avoid predators
-        const aHere = world.animalAtTile(nx, ny);
-        if (aHere && aHere.isCarnivore()) score -= 2;
-        if (this.kingdom && world.kingdomAtTile(nx, ny) === this.kingdom.id) score += 0.3;
-        if (this.kingdom && this.kingdom.capital) {
-          const d = Math.sqrt(dist2(nx, ny, this.kingdom.capital.x, this.kingdom.capital.y));
-          if (goingHome) score -= d * 0.05;
-          else score -= d * 0.005 * (this.hunger < 0.7 ? 1.5 : 0.5);
-        }
-        if (score > bestScore) {
-          bestScore = score;
-          best = [nx, ny];
-        }
-      }
-    }
-    if (best) {
-      world.setHumanAt(this.x, this.y, null);
-      this.x = best[0];
-      this.y = best[1];
-      world.setHumanAt(this.x, this.y, this);
-    }
-  }
-
   tryReproduce(world) {
-    // Find an adjacent partner (same kingdom or both tribeless) for gene mixing
     let partner = null;
     for (const [dx, dy] of NEIGHBORS_8) {
       const nx = this.x + dx;
@@ -208,13 +432,25 @@ export class Human {
         break;
       }
     }
-    // Place child adjacent
+    // Detect a nearby elder for cultural mentorship.
+    let elderBoost = null;
+    for (const h of nearbyHumans(world, this.x, this.y, 2)) {
+      if (h !== this && h !== partner && h.alive && h.age > h.lifespan * 0.6 && h.kingdom === this.kingdom) {
+        elderBoost = h;
+        break;
+      }
+    }
     for (const [dx, dy] of NEIGHBORS_8) {
       const nx = this.x + dx;
       const ny = this.y + dy;
       if (!world.canHumanStand(nx, ny)) continue;
       this.hunger -= CONFIG.HUMAN_REPRODUCE_COST;
-      const childGenes = inheritGenes(this.genes, partner ? partner.genes : null, CONFIG.HUMAN_GENE_MUTATE_RATE);
+      let childGenes = inheritGenes(this.genes, partner ? partner.genes : null, CONFIG.HUMAN_GENE_MUTATE_RATE);
+      if (elderBoost) {
+        // Cultural transmission: elders pass on a small smarts/faith bump.
+        childGenes.smarts = clamp(childGenes.smarts + 0.04, 0, 1);
+        childGenes.faith  = clamp(childGenes.faith  + 0.02, 0, 1);
+      }
       const child = new Human(nx, ny, this.kingdom, childGenes);
       child.hunger = CONFIG.HUMAN_BABY_HUNGER;
       child.generation = (this.generation || 1) + 1;
@@ -281,10 +517,9 @@ export class Human {
       if (!world.inBounds(nx, ny)) continue;
       const other = world.humanAt[world.idx(nx, ny)];
       if (other && other.kingdom === enemy) {
-        // strength gene + agg gene + tech tier all contribute
-        const aBonus = this.genes.strength * 0.4 + this.genes.agg * 0.2;
+        const aBonus = this.genes.strength * 0.5 + this.genes.agg * 0.25 + (this.role === "warrior" ? 0.3 : 0);
         const bDef = (other.genes.strength + 0.5) * 0.5;
-        const p = CONFIG.HUMAN_FIGHT_CHANCE * (1 + this.kingdom.techTier * 0.25) * (1 + aBonus) / bDef;
+        const p = CONFIG.HUMAN_FIGHT_CHANCE * (1 + this.kingdom.techTier * 0.3) * (1 + aBonus) / bDef;
         if (chance(p)) {
           other.alive = false;
           if (other.kingdom) other.kingdom.population--;
@@ -300,6 +535,28 @@ export class Human {
     if (this.kingdom) this.kingdom.population = Math.max(0, this.kingdom.population - 1);
     if (world.terrainAt(this.x, this.y) === TERRAIN.GRASS && chance(0.4)) {
       world.addFood(this.x, this.y);
+    }
+  }
+}
+
+function pickRole(genes) {
+  let bestKey = "fertility";
+  let bestVal = -1;
+  for (const k of Object.keys(ROLE_BY_DOMINANT)) {
+    if (genes[k] > bestVal) { bestVal = genes[k]; bestKey = k; }
+  }
+  if (bestVal < 0.55) return "forager";
+  return ROLE_BY_DOMINANT[bestKey];
+}
+
+function* nearbyHumans(world, cx, cy, radius) {
+  for (let dy = -radius; dy <= radius; dy++) {
+    for (let dx = -radius; dx <= radius; dx++) {
+      const nx = cx + dx;
+      const ny = cy + dy;
+      if (!world.inBounds(nx, ny)) continue;
+      const h = world.humanAt[world.idx(nx, ny)];
+      if (h) yield h;
     }
   }
 }
@@ -332,38 +589,43 @@ export class Kingdom {
     this.buildings = [];
     this.history = [];
     this.resources = { wood: 0, stone: 0, iron: 0 };
+    // Group memory: tile indices we've seen with each resource.
+    this.knownWood  = new Set();
+    this.knownStone = new Set();
+    this.knownIron  = new Set();
+  }
+
+  /** Which resource is most lacking right now? Drives harvester targeting. */
+  mostNeededResource() {
+    const r = this.resources;
+    // weight by build cost demands at our current tech
+    const wantsIron = this.techTier >= CONFIG.BUILD_COSTS.town.minTech;
+    const def = { wood: r.wood, stone: r.stone, iron: r.iron + (wantsIron ? 0 : 99) };
+    let lowest = "wood";
+    let lo = def.wood;
+    if (def.stone < lo) { lowest = "stone"; lo = def.stone; }
+    if (def.iron  < lo) { lowest = "iron";  lo = def.iron;  }
+    return lowest;
+  }
+
+  /** Where should a carrier with a full load go to drop off? */
+  depositTarget(_human) {
+    // Capital is always valid; pick a closer building if there is one.
+    let best = this.capital;
+    let bestD = Infinity;
+    for (const b of this.buildings) {
+      const d = dist2(_human.x, _human.y, b.x, b.y);
+      if (d < bestD) { bestD = d; best = b; }
+    }
+    return best;
   }
 
   tick(world) {
-    // claim adjacent unclaimed tiles around capital + buildings
     if ((world.tick & 31) === 0) this.expandTerritory(world);
 
-    // tech advancement — smarts gene of average citizen accelerates this
-    if ((world.tick & 63) === 0) {
-      // sum smarts to compute a tech bonus (rare drift)
-      let smartsSum = 0;
-      let count = 0;
-      for (const h of world.humans) {
-        if (h.alive && h.kingdom === this) { smartsSum += h.genes.smarts; count++; }
-      }
-      const meanSmarts = count ? smartsSum / count : 0.5;
-      const effectivePop = Math.round(this.population * (0.7 + meanSmarts * 0.6));
-      while (
-        this.techTier < CONFIG.TECH_TIERS.length - 1 &&
-        effectivePop >= CONFIG.TECH_THRESHOLDS[this.techTier + 1]
-      ) {
-        this.techTier++;
-        world.eventLog.push({
-          tick: world.tick,
-          type: "tech",
-          msg: `${this.culture} ${this.name} entered the ${CONFIG.TECH_TIERS[this.techTier]} Age.`,
-        });
-      }
-    }
+    if ((world.tick & 63) === 0) this.advanceTech(world);
 
-    // wars: declare/end — aggression gene biases declaration
     if (!this.warTarget) {
-      // mean aggression of citizens
       let agg = 0;
       let n = 0;
       for (const h of world.humans) {
@@ -408,13 +670,43 @@ export class Kingdom {
     }
   }
 
+  /** Tech progress is driven by population × meanSmarts, plus a small
+   *  scholar count bonus. Faster than pop-only thresholds. */
+  advanceTech(world) {
+    let smartsSum = 0;
+    let count = 0;
+    let scholars = 0;
+    let priests = 0;
+    for (const h of world.humans) {
+      if (h.alive && h.kingdom === this) {
+        smartsSum += h.genes.smarts;
+        count++;
+        if (h.role === "scholar") scholars++;
+        if (h.role === "priest")  priests++;
+      }
+    }
+    const meanSmarts = count ? smartsSum / count : 0.5;
+    const effectivePop = Math.round(this.population * (0.7 + meanSmarts * 0.7) + scholars * 1.5 + priests * 0.5);
+    while (
+      this.techTier < CONFIG.TECH_TIERS.length - 1 &&
+      effectivePop >= CONFIG.TECH_THRESHOLDS[this.techTier + 1]
+    ) {
+      this.techTier++;
+      world.eventLog.push({
+        tick: world.tick,
+        type: "tech",
+        msg: `${this.culture} ${this.name} entered the ${CONFIG.TECH_TIERS[this.techTier]} Age.`,
+      });
+    }
+  }
+
   expandTerritory(world) {
     if (this.population <= 0) return;
     const ring = [this.capital, ...this.buildings];
     const frontier = [];
     for (const o of ring) frontier.push([o.x, o.y]);
     let claimedThisTick = 0;
-    const maxClaim = Math.min(8, 1 + (this.population >> 1));
+    const maxClaim = Math.min(12, 2 + (this.population >> 1));
     while (frontier.length && claimedThisTick < maxClaim) {
       const [x, y] = frontier.shift();
       for (const [dx, dy] of NEIGHBORS_4) {
@@ -434,16 +726,12 @@ export class Kingdom {
     }
   }
 
-  /** Pick the next viable building kind: shrine → village → town → castle.
-   *  Each kind requires a population threshold AND enough resources in the
-   *  kingdom's coffers. Buildings are constructed near `founder`. */
   maybeBuild(world, founder) {
     const pop = this.population;
     const counts = { shrine: 0, village: 0, town: 0, castle: 0 };
     for (const b of this.buildings) counts[b.kind] = (counts[b.kind] || 0) + 1;
 
     let kind = null;
-    // Shrine: faith-driven; goes up early if any citizen is very faithful.
     if (counts.shrine < 1 && pop >= CONFIG.BUILD_COSTS.shrine.atPop && this.meanFaith(world) > 0.45) kind = "shrine";
     else if (pop >= CONFIG.BUILD_COSTS.castle.atPop && counts.castle === 0 && this.techTier >= CONFIG.BUILD_COSTS.castle.minTech) kind = "castle";
     else if (pop >= CONFIG.BUILD_COSTS.town.atPop && counts.town < 1 + (pop / 30 | 0) && this.techTier >= CONFIG.BUILD_COSTS.town.minTech) kind = "town";
@@ -451,9 +739,9 @@ export class Kingdom {
     if (!kind) return;
 
     const cost = CONFIG.BUILD_COSTS[kind];
-    if (this.resources.wood < cost.wood) return;
+    if (this.resources.wood  < cost.wood)  return;
     if (this.resources.stone < cost.stone) return;
-    if (this.resources.iron < cost.iron) return;
+    if (this.resources.iron  < cost.iron)  return;
 
     for (const [dx, dy] of NEIGHBORS_8) {
       const x = founder.x + dx;
@@ -463,10 +751,9 @@ export class Kingdom {
       if (!TERRAIN_WALKABLE[t]) continue;
       if (world.buildingAt[world.idx(x, y)]) continue;
 
-      // Pay the cost only once we've found a slot.
-      this.resources.wood -= cost.wood;
+      this.resources.wood  -= cost.wood;
       this.resources.stone -= cost.stone;
-      this.resources.iron -= cost.iron;
+      this.resources.iron  -= cost.iron;
 
       const b = new Building(x, y, kind, this);
       world.setBuilding(x, y, b);
@@ -503,6 +790,15 @@ export class Kingdom {
     if (!n) return acc;
     for (const k of Object.keys(acc)) acc[k] /= n;
     return acc;
+  }
+
+  /** Live count of each role for the Peoples panel. */
+  roleCounts(world) {
+    const out = { warrior: 0, scholar: 0, priest: 0, mother: 0, raider: 0, forager: 0 };
+    for (const h of world.humans) {
+      if (h.alive && h.kingdom === this) out[h.role] = (out[h.role] || 0) + 1;
+    }
+    return out;
   }
 
   techName() {

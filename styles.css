@@ -381,6 +381,21 @@ button.primary:hover {
   color: var(--danger);
 }
 
+.people .roles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  font-size: 10px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+.people .roles span {
+  background: var(--bg-2);
+  padding: 0 4px;
+  border-radius: 3px;
+}
+
 .people .genes {
   display: flex;
   gap: 4px;

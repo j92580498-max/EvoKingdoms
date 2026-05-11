@@ -217,6 +217,7 @@ export class UI {
     }
     el.innerHTML = ks.slice(0, 20).map((k) => {
       const genes = k.meanGenes(w);
+      const roles = k.roleCounts(w);
       const warTag = k.warTarget ? `<span class="at-war">⚔ ${k.warTarget.culture} ${k.warTarget.name}</span>` : "";
       const r = k.resources;
       return `
@@ -234,6 +235,14 @@ export class UI {
             <span>⛓${r.iron}</span>
             <span>${k.buildings.length}🏠</span>
             ${warTag}
+          </div>
+          <div class="roles" title="warriors / scholars / priests / mothers / raiders / foragers">
+            <span>⚔${roles.warrior}</span>
+            <span>📜${roles.scholar}</span>
+            <span>🕯${roles.priest}</span>
+            <span>👶${roles.mother}</span>
+            <span>🗡${roles.raider}</span>
+            <span>🌾${roles.forager}</span>
           </div>
           <div class="genes">
             <span title="strength">str ${genes.strength.toFixed(2)}</span>

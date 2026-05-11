@@ -104,13 +104,19 @@ export class Animal {
           this.hunger = Math.min(1.6, this.hunger + CONFIG.ANIMAL_EAT_GAIN);
           return true;
         }
-        // attack humans only rarely (predators sometimes raid villages)
+        // attack humans only rarely; warriors fight back. A lone human in
+        // their own territory has the kingdom's tech tier defending them.
         const h = world.humanAt[world.idx(nx, ny)];
-        if (h && h.alive && chance(0.05 * this.genes.strength)) {
-          h.alive = false;
-          if (h.kingdom) h.kingdom.population = Math.max(0, h.kingdom.population - 1);
-          this.hunger = Math.min(1.6, this.hunger + CONFIG.ANIMAL_FOOD_GAIN_FROM_HUNT);
-          return true;
+        if (h && h.alive) {
+          const warriorDef = h.role === "warrior" ? 0.6 : 0.0;
+          const techDef = h.kingdom ? h.kingdom.techTier * 0.08 : 0;
+          const pAtt = 0.025 * this.genes.strength * (1 - warriorDef - techDef);
+          if (pAtt > 0 && chance(pAtt)) {
+            h.alive = false;
+            if (h.kingdom) h.kingdom.population = Math.max(0, h.kingdom.population - 1);
+            this.hunger = Math.min(1.6, this.hunger + CONFIG.ANIMAL_FOOD_GAIN_FROM_HUNT);
+            return true;
+          }
         }
       }
       return false;
