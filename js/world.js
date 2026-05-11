@@ -216,7 +216,8 @@ export class World {
     if (this.era === "sentient") return;
     this.era = "sentient";
     this.eventLog.push({ tick: this.tick, type: "era", msg: "The Sentient Era has begun — humans awaken!" });
-    // Spawn humans from the largest organism colonies. Imported lazily to avoid cycle.
+    // Spawn humans from the largest organism colonies, then top up from random
+    // grass tiles so the Sentient era is never DOA when there are no organisms.
     import("./civilization.js").then(({ Human }) => {
       const best = [...this.organisms]
         .filter((o) => o.alive)
@@ -229,11 +230,31 @@ export class World {
           const x = o.x + dx;
           const y = o.y + dy;
           if (this.canHumanStand(x, y)) {
-            this.humans.push(new Human(x, y));
+            const h = new Human(x, y);
+            this.humans.push(h);
+            this.setHumanAt(x, y, h);
             spawned++;
             break;
           }
         }
+      }
+      // Fallback: scatter remaining humans on any walkable tile so the
+      // user-pressed "Advance Era" always produces a population.
+      let tries = 0;
+      while (spawned < CONFIG.HUMAN_INITIAL_SPAWN && tries++ < 800) {
+        const x = randInt(2, this.W - 3);
+        const y = randInt(2, this.H - 3);
+        if (!this.canHumanStand(x, y)) continue;
+        const h = new Human(x, y);
+        this.humans.push(h);
+        this.setHumanAt(x, y, h);
+        spawned++;
+      }
+      // Seed a starter food field for the new humans so they don't immediately starve.
+      for (let i = 0; i < this.size * 0.01; i++) {
+        const x = randInt(0, this.W - 1);
+        const y = randInt(0, this.H - 1);
+        if (this.terrainAt(x, y) === TERRAIN.GRASS) this.addFood(x, y);
       }
     });
   }

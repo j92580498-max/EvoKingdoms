@@ -14,7 +14,7 @@ export const CONFIG = {
   GRASS_REGROW_CHANCE: 0.0008,
   WATER_EVAPORATE_CHANCE: 0.00005,
   LAVA_COOL_CHANCE: 0.004,
-  FOOD_NATURAL_SPAWN_CHANCE: 0.00002,
+  FOOD_NATURAL_SPAWN_CHANCE: 0.00012,
   FOOD_MAX_PER_TILE: 1,
 
   // organism / cells
@@ -33,25 +33,25 @@ export const CONFIG = {
 
   // civilization
   SENTIENT_TRIGGER_MAX_CELLS: 9, // when any organism reaches this size
-  HUMAN_INITIAL_SPAWN: 6, // when era flips, spawn this many seed humans
-  HUMAN_HUNGER_TICK: 0.018,
-  HUMAN_EAT_GAIN: 0.6,
-  HUMAN_REPRODUCE_AT: 1.6,
-  HUMAN_REPRODUCE_COST: 0.7,
-  HUMAN_BABY_HUNGER: 0.8,
-  HUMAN_LIFESPAN: 7200, // ticks
+  HUMAN_INITIAL_SPAWN: 14, // when era flips, spawn this many seed humans
+  HUMAN_HUNGER_TICK: 0.0005, // tiny per-tick hunger decay so humans actually live
+  HUMAN_EAT_GAIN: 0.5,
+  HUMAN_REPRODUCE_AT: 1.1,
+  HUMAN_REPRODUCE_COST: 0.4,
+  HUMAN_BABY_HUNGER: 1.0,
+  HUMAN_LIFESPAN: 12000, // ticks
   HUMAN_MOVE_INTERVAL: 5,
   HUMAN_BUILD_INTERVAL: 200,
   HUMAN_FORAGE_RADIUS: 14,
   HUMAN_FIGHT_CHANCE: 0.15,
-  KINGDOM_FOUND_POP: 4,
+  KINGDOM_FOUND_POP: 3,
   TECH_TIERS: ["Stone", "Bronze", "Iron", "Industrial", "Atomic"],
-  TECH_THRESHOLDS: [0, 20, 60, 150, 350], // pop needed for each tier
-  WAR_DECLARE_CHANCE: 0.00015,
+  TECH_THRESHOLDS: [0, 12, 40, 100, 240], // pop needed for each tier
+  WAR_DECLARE_CHANCE: 0.0003,
   WAR_END_CHANCE: 0.0008,
-  BUILD_VILLAGE_AT_POP: 4,
-  BUILD_TOWN_AT_POP: 18,
-  BUILD_CASTLE_AT_POP: 50,
+  BUILD_VILLAGE_AT_POP: 3,
+  BUILD_TOWN_AT_POP: 12,
+  BUILD_CASTLE_AT_POP: 35,
 
   // disasters
   METEOR_RADIUS: 9,
