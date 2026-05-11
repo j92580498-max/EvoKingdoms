@@ -56,7 +56,6 @@ class Game {
     if (!this.paused) {
       const tickInterval = 1000 / this.targetTPS;
       this.tickAcc += dt;
-      // safety cap to avoid spiral-of-death after a long tab pause
       let budget = 0;
       while (this.tickAcc >= tickInterval && budget < this.targetTPS / 4 + 4) {
         this.world.step();
@@ -76,6 +75,9 @@ class Game {
     if ((this.world.tick & 7) === 0) {
       const s = computeStats(this.world);
       renderStats(s, document.getElementById("stats"));
+    }
+    if ((this.world.tick & 31) === 0) {
+      this.ui.renderPeoples();
     }
 
     this.flushEventLog();

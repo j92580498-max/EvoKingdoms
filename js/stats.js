@@ -1,6 +1,7 @@
 // Compute live counts for the sidebar.
 
 import { CELL_DEFS } from "./cell.js";
+import { SPECIES } from "./animal.js";
 
 export function computeStats(world) {
   let alive = 0;
@@ -16,6 +17,13 @@ export function computeStats(world) {
   }
   let humansAlive = 0;
   for (const h of world.humans) if (h.alive) humansAlive++;
+  let animalsAlive = 0;
+  const speciesHist = {};
+  for (const a of world.animals) {
+    if (!a.alive) continue;
+    animalsAlive++;
+    speciesHist[a.species] = (speciesHist[a.species] || 0) + 1;
+  }
   const wars = world.kingdoms.filter((k) => k.warTarget).length / 2;
 
   return {
@@ -26,6 +34,8 @@ export function computeStats(world) {
     maxCells,
     cellHist,
     humans: humansAlive,
+    animals: animalsAlive,
+    speciesHist,
     kingdoms: world.kingdoms.filter((k) => k.population > 0).length,
     wars,
     buildings: world.buildings.length,
@@ -37,15 +47,21 @@ export function renderStats(stats, el) {
     .sort((a, b) => b[1] - a[1])
     .map(([t, n]) => `<span class="k">${CELL_DEFS[t]?.name || "?"}</span><span class="v">${n}</span>`)
     .join("");
+  const speciesRows = Object.entries(stats.speciesHist)
+    .sort((a, b) => b[1] - a[1])
+    .map(([s, n]) => `<span class="k">${SPECIES[s]?.name || s}</span><span class="v">${n}</span>`)
+    .join("");
   el.innerHTML = `
     <span class="k">Tick</span><span class="v">${stats.tick}</span>
     <span class="k">Organisms</span><span class="v">${stats.organisms}</span>
     <span class="k">Avg cells</span><span class="v">${stats.avgCells}</span>
     <span class="k">Largest</span><span class="v">${stats.maxCells}</span>
+    <span class="k">Animals</span><span class="v">${stats.animals}</span>
     <span class="k">Humans</span><span class="v">${stats.humans}</span>
     <span class="k">Kingdoms</span><span class="v">${stats.kingdoms}</span>
     <span class="k">Wars</span><span class="v">${stats.wars}</span>
     <span class="k">Buildings</span><span class="v">${stats.buildings}</span>
     ${cellRows}
+    ${speciesRows}
   `;
 }

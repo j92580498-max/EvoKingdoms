@@ -1,9 +1,9 @@
-// World: terrain, food, occupants. Drives the per-tick simulation loop.
+// World: terrain, food, resources, occupants. Drives the per-tick simulation loop.
 
 import { CONFIG, TERRAIN, TERRAIN_WALKABLE } from "./config.js";
 import { chance, rand, randInt, pick, NEIGHBORS_4, NEIGHBORS_8 } from "./utils.js";
-import { CELL } from "./cell.js";
 import { Organism, makeStarterOrganism } from "./organism.js";
+import { Animal, SPECIES, randomAnimalGenes } from "./animal.js";
 
 export class World {
   constructor(width = CONFIG.GRID_W, height = CONFIG.GRID_H) {
@@ -12,14 +12,22 @@ export class World {
     this.size = width * height;
     this.terrain = new Uint8Array(this.size);
     this.food = new Uint8Array(this.size);
+    // Resources packed per-tile
+    this.wood = new Uint8Array(this.size);
+    this.stoneOre = new Uint8Array(this.size);
+    this.ironOre = new Uint8Array(this.size);
+    this.microbe = new Uint8Array(this.size); // 0 = none, 1 = benign, 2 = pathogen
+
     this.org = new Array(this.size).fill(null); // Organism refs per tile
     this.humanAt = new Array(this.size).fill(null); // Human ref per tile
+    this.animalAt = new Array(this.size).fill(null); // Animal ref per tile
     this.buildingAt = new Array(this.size).fill(null);
     this.kingdomTerritory = new Int16Array(this.size); // -1 unclaimed, else kingdom id
     this.kingdomTerritory.fill(-1);
 
     this.organisms = [];
     this.humans = [];
+    this.animals = [];
     this.kingdoms = [];
     this.buildings = [];
     this.wars = []; // { a, b, ticks }
@@ -27,6 +35,8 @@ export class World {
     this.tick = 0;
     this.eventLog = [];
     this.generateTerrain();
+    this.generateResources();
+    this.seedMicrobes();
   }
 
   idx(x, y) { return y * this.W + x; }
@@ -62,15 +72,49 @@ export class World {
     return false;
   }
 
-  /** Scoring used by Eye senses. Positive = attractive (food, enemy mouth);
-   *  Negative score is currently unused but space is here. */
+  // ----- resource accessors -----
+  hasWood(x, y)  { return this.inBounds(x, y) && this.wood[this.idx(x, y)] > 0; }
+  hasStone(x, y) { return this.inBounds(x, y) && this.stoneOre[this.idx(x, y)] > 0; }
+  hasIron(x, y)  { return this.inBounds(x, y) && this.ironOre[this.idx(x, y)] > 0; }
+  takeWood(x, y) {
+    if (!this.hasWood(x, y)) return 0;
+    this.wood[this.idx(x, y)]--;
+    return 1;
+  }
+  takeStone(x, y) {
+    if (!this.hasStone(x, y)) return 0;
+    this.stoneOre[this.idx(x, y)]--;
+    return 1;
+  }
+  takeIron(x, y) {
+    if (!this.hasIron(x, y)) return 0;
+    this.ironOre[this.idx(x, y)]--;
+    return 1;
+  }
+
+  animalAtTile(x, y) {
+    if (!this.inBounds(x, y)) return null;
+    return this.animalAt[this.idx(x, y)];
+  }
+  setAnimalAt(x, y, a) {
+    if (!this.inBounds(x, y)) return;
+    this.animalAt[this.idx(x, y)] = a;
+  }
+  canAnimalStand(x, y) {
+    if (!this.inBounds(x, y)) return false;
+    const t = this.terrainAt(x, y);
+    if (!TERRAIN_WALKABLE[t]) return false;
+    if (this.animalAt[this.idx(x, y)]) return false;
+    return true;
+  }
+
+  /** Scoring used by Eye senses. */
   cellInterest(x, y, self) {
     if (!this.inBounds(x, y)) return 0;
     let s = 0;
     if (this.food[this.idx(x, y)] > 0) s += 1;
     const other = this.org[this.idx(x, y)];
     if (other && other !== self) {
-      // approach prey-like organisms (no killers); avoid killers
       if (other.killerCount > self.killerCount + 1) s -= 1.2;
       else if (self.killerCount > 0) s += 0.6;
     }
@@ -79,8 +123,6 @@ export class World {
 
   // ----- terrain generation -----
   generateTerrain() {
-    // Simple Perlin-ish noise via stacked sin/cos. Not perfect but fast and
-    // produces believable land/water masses.
     const seedA = rand() * 1000;
     const seedB = rand() * 1000;
     for (let y = 0; y < this.H; y++) {
@@ -109,6 +151,41 @@ export class World {
     }
   }
 
+  /** Place trees on grass and stone/iron ore on mountains. Called once at
+   *  world birth — natural regrowth is in resourcesTick. */
+  generateResources() {
+    for (let y = 0; y < this.H; y++) {
+      for (let x = 0; x < this.W; x++) {
+        const t = this.terrainAt(x, y);
+        const i = this.idx(x, y);
+        if (t === TERRAIN.GRASS && chance(CONFIG.TREE_DENSITY)) {
+          this.wood[i] = randInt(1, CONFIG.MAX_WOOD_PER_TILE);
+        } else if (t === TERRAIN.MOUNTAIN || t === TERRAIN.SNOW) {
+          // mountains hold stone and (rarer) iron
+          if (chance(CONFIG.STONE_VEIN_CHANCE)) {
+            this.stoneOre[i] = randInt(1, CONFIG.MAX_ORE_PER_TILE);
+          }
+          if (chance(CONFIG.IRON_VEIN_CHANCE)) {
+            this.ironOre[i] = randInt(1, 2);
+          }
+        } else if (t === TERRAIN.DIRT && chance(0.04)) {
+          // small chance of surface stone in dirt
+          this.stoneOre[i] = 1;
+        }
+      }
+    }
+  }
+
+  seedMicrobes() {
+    for (let y = 0; y < this.H; y++) {
+      for (let x = 0; x < this.W; x++) {
+        if (this.terrainAt(x, y) === TERRAIN.GRASS && chance(CONFIG.MICROBE_START_DENSITY)) {
+          this.microbe[this.idx(x, y)] = 1;
+        }
+      }
+    }
+  }
+
   seedLife(n = CONFIG.START_ORGANISMS) {
     for (let i = 0; i < n; i++) {
       for (let tries = 0; tries < 50; tries++) {
@@ -131,26 +208,44 @@ export class World {
         this.addFood(x, y);
       }
     }
+    this.seedAnimals();
+  }
+
+  seedAnimals(n = CONFIG.START_ANIMALS) {
+    const speciesKeys = Object.keys(SPECIES);
+    for (let i = 0; i < n; i++) {
+      for (let tries = 0; tries < 40; tries++) {
+        const x = randInt(2, this.W - 3);
+        const y = randInt(2, this.H - 3);
+        if (!this.canAnimalStand(x, y)) continue;
+        const sp = pick(speciesKeys);
+        const a = new Animal(x, y, sp, randomAnimalGenes(sp));
+        this.animals.push(a);
+        this.setAnimalAt(x, y, a);
+        break;
+      }
+    }
   }
 
   // ----- per-tick driver -----
   step() {
     this.tick++;
     this.terrainTick();
+    this.resourcesTick();
+    this.microbeTick();
     this.organismsTick();
+    this.animalsTick();
     this.humansTick();
     this.kingdomsTick();
     this.maybeEnterSentientEra();
   }
 
   terrainTick() {
-    // small sampled cellular automaton — only inspect a fraction of tiles per tick
     const samples = (this.size * 0.01) | 0;
     for (let s = 0; s < samples; s++) {
       const i = (rand() * this.size) | 0;
       const t = this.terrain[i];
       if (t === TERRAIN.DIRT && chance(CONFIG.GRASS_REGROW_CHANCE * 100)) {
-        // dirt slowly turns to grass if next to grass
         const x = i % this.W;
         const y = (i / this.W) | 0;
         let grassAdj = 0;
@@ -168,15 +263,92 @@ export class World {
     }
   }
 
+  resourcesTick() {
+    // Forests slowly regrow on grass tiles adjacent to existing trees.
+    const samples = (this.size * 0.004) | 0;
+    for (let s = 0; s < samples; s++) {
+      const i = (rand() * this.size) | 0;
+      if (this.terrain[i] !== TERRAIN.GRASS) continue;
+      if (this.wood[i] >= CONFIG.MAX_WOOD_PER_TILE) continue;
+      if (!chance(CONFIG.TREE_REGROW_CHANCE * 200)) continue;
+      const x = i % this.W;
+      const y = (i / this.W) | 0;
+      let neigh = 0;
+      for (const [dx, dy] of NEIGHBORS_4) {
+        if (this.hasWood(x + dx, y + dy)) neigh++;
+      }
+      if (neigh > 0) this.wood[i] = Math.min(CONFIG.MAX_WOOD_PER_TILE, this.wood[i] + 1);
+    }
+  }
+
+  microbeTick() {
+    // Spreading microflora — a low-resolution organic veneer over the grass.
+    const samples = (this.size * 0.004) | 0;
+    for (let s = 0; s < samples; s++) {
+      const i = (rand() * this.size) | 0;
+      const m = this.microbe[i];
+      if (m === 0) continue;
+      // chance to decay
+      if (chance(CONFIG.MICROBE_DECAY_CHANCE)) {
+        this.microbe[i] = 0;
+        continue;
+      }
+      // chance to spread to a grass neighbor
+      if (chance(CONFIG.MICROBE_SPREAD_CHANCE)) {
+        const x = i % this.W;
+        const y = (i / this.W) | 0;
+        const [dx, dy] = pick(NEIGHBORS_4);
+        const nx = x + dx;
+        const ny = y + dy;
+        if (this.inBounds(nx, ny) &&
+            this.terrainAt(nx, ny) === TERRAIN.GRASS &&
+            this.microbe[this.idx(nx, ny)] === 0) {
+          this.microbe[this.idx(nx, ny)] = m;
+        }
+      }
+      // ultra-rare pathogenic mutation, leads to a local plague
+      if (m === 1 && chance(CONFIG.MICROBE_PATHOGEN_CHANCE)) {
+        this.microbe[i] = 2;
+        this.eventLog.push({
+          tick: this.tick,
+          type: "disaster",
+          msg: "A microbe turned pathogenic.",
+        });
+      }
+      // pathogens that touch a human kill them and dissipate
+      if (m === 2) {
+        const x = i % this.W;
+        const y = (i / this.W) | 0;
+        for (const [dx, dy] of NEIGHBORS_8) {
+          const h = this.humanAt[this.idx((x + dx + this.W) % this.W, (y + dy + this.H) % this.H)];
+          if (h && h.alive && chance(0.02)) {
+            h.alive = false;
+            this.microbe[i] = 0;
+            break;
+          }
+        }
+      }
+    }
+  }
+
   organismsTick() {
-    // iterate over a snapshot since organisms may die / reproduce
     const list = this.organisms;
     for (let i = 0; i < list.length; i++) {
       list[i].tick(this);
     }
-    // compact dead
     if ((this.tick & 31) === 0) {
       this.organisms = this.organisms.filter((o) => o.alive);
+    }
+  }
+
+  animalsTick() {
+    const list = this.animals;
+    for (let i = 0; i < list.length; i++) {
+      const a = list[i];
+      if (a.alive) a.tick(this);
+    }
+    if ((this.tick & 31) === 0) {
+      this.animals = this.animals.filter((a) => a.alive);
     }
   }
 
@@ -216,8 +388,6 @@ export class World {
     if (this.era === "sentient") return;
     this.era = "sentient";
     this.eventLog.push({ tick: this.tick, type: "era", msg: "The Sentient Era has begun — humans awaken!" });
-    // Spawn humans from the largest organism colonies, then top up from random
-    // grass tiles so the Sentient era is never DOA when there are no organisms.
     import("./civilization.js").then(({ Human }) => {
       const best = [...this.organisms]
         .filter((o) => o.alive)
@@ -238,8 +408,6 @@ export class World {
           }
         }
       }
-      // Fallback: scatter remaining humans on any walkable tile so the
-      // user-pressed "Advance Era" always produces a population.
       let tries = 0;
       while (spawned < CONFIG.HUMAN_INITIAL_SPAWN && tries++ < 800) {
         const x = randInt(2, this.W - 3);
@@ -250,7 +418,6 @@ export class World {
         this.setHumanAt(x, y, h);
         spawned++;
       }
-      // Seed a starter food field for the new humans so they don't immediately starve.
       for (let i = 0; i < this.size * 0.01; i++) {
         const x = randInt(0, this.W - 1);
         const y = randInt(0, this.H - 1);
@@ -293,23 +460,40 @@ export class World {
     const i = this.idx(x, y);
     const t = this.terrain[i];
     const food = this.food[i];
+    const wood = this.wood[i];
+    const stone = this.stoneOre[i];
+    const iron = this.ironOre[i];
+    const microbe = this.microbe[i];
     const org = this.org[i];
     const h = this.humanAt[i];
+    const animal = this.animalAt[i];
     const b = this.buildingAt[i];
     const k = this.kingdomTerritory[i];
-    return { x, y, terrain: t, food, organism: org, human: h, building: b, kingdom: k };
+    return {
+      x, y, terrain: t, food, wood, stone, iron, microbe,
+      organism: org, human: h, animal, building: b, kingdom: k,
+    };
   }
 
   // ----- direct manipulation (god tools) -----
   paintTerrain(x, y, t) {
     if (!this.inBounds(x, y)) return;
-    this.terrain[this.idx(x, y)] = t;
+    const i = this.idx(x, y);
+    this.terrain[i] = t;
+    // changing terrain wipes resource overlays that don't belong there
+    if (t !== TERRAIN.GRASS) this.wood[i] = 0;
+    if (t !== TERRAIN.MOUNTAIN && t !== TERRAIN.SNOW && t !== TERRAIN.DIRT) {
+      this.stoneOre[i] = 0;
+      this.ironOre[i] = 0;
+    }
+    if (t !== TERRAIN.GRASS) this.microbe[i] = 0;
     if (!TERRAIN_WALKABLE[t]) {
-      // kill anything standing here
-      const o = this.org[this.idx(x, y)];
+      const o = this.org[i];
       if (o) o.die(this);
-      const h = this.humanAt[this.idx(x, y)];
+      const h = this.humanAt[i];
       if (h) h.alive = false;
+      const a = this.animalAt[i];
+      if (a) a.alive = false;
     }
   }
 
@@ -345,6 +529,8 @@ export class World {
     if (o) o.die(this);
     const h = this.humanAt[this.idx(x, y)];
     if (h) h.alive = false;
+    const a = this.animalAt[this.idx(x, y)];
+    if (a) a.alive = false;
   }
 
   pickRandomPosition() {

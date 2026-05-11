@@ -31,7 +31,7 @@ body {
 
 #app {
   display: grid;
-  grid-template-columns: 320px 1fr;
+  grid-template-columns: 340px 1fr;
   height: 100vh;
 }
 
@@ -46,9 +46,6 @@ body {
   padding: 16px 0 6px;
   border-bottom: 1px solid var(--border);
   margin-bottom: 10px;
-}
-
-#sidebar header {
   position: relative;
 }
 
@@ -155,8 +152,8 @@ body {
   position: absolute;
   top: 12px;
   right: 12px;
-  width: 260px;
-  max-height: 200px;
+  width: 280px;
+  max-height: 220px;
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -324,6 +321,79 @@ button.primary:hover {
   text-align: right;
 }
 
+/* Peoples panel — one row per living kingdom */
+.peoples {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.people {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-left-width: 4px;
+  border-radius: 5px;
+  padding: 6px 8px;
+  font-size: 11px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.people .people-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.people .banner {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 1px solid rgba(0, 0, 0, 0.4);
+  flex: none;
+}
+
+.people .name {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.people .rel {
+  font-size: 13px;
+}
+
+.people .people-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.people .people-stats .at-war {
+  color: var(--danger);
+}
+
+.people .genes {
+  display: flex;
+  gap: 4px;
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.people .genes span {
+  background: var(--bg-2);
+  padding: 0 4px;
+  border-radius: 3px;
+}
+
 #main {
   position: relative;
   overflow: hidden;
@@ -400,6 +470,21 @@ canvas {
 
 #inspect .label {
   color: var(--muted);
+}
+
+#inspect .gene-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 2px;
+}
+
+#inspect .gene-row span {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0 4px;
+  font-size: 11px;
 }
 
 [data-disaster] {
