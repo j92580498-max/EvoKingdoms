@@ -30,6 +30,9 @@ class Game {
     this.world.seedLife();
     this.renderer.setWorld(this.world);
     this.renderer.resize();
+    this._lastEventIdx = 0;
+    const log = document.getElementById("event-log");
+    if (log) log.innerHTML = "";
     this.toast("World reset.");
   }
 
