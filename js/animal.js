@@ -164,19 +164,34 @@ export class Animal {
     let predClose = -1;
     let preyClose = -1;
     let humanClose = -1;
+    // Track the nearest food / prey direction so a starving animal can
+    // bypass the brain and head straight at it (otherwise a randomly
+    // initialised brain can override the food drive and starve).
+    let bestFoodDx = 0, bestFoodDy = 0, bestFoodD = Infinity;
+    let bestPreyDx = 0, bestPreyDy = 0, bestPreyD = Infinity;
     for (let dy = -visionTiles; dy <= visionTiles; dy++) {
       for (let dx = -visionTiles; dx <= visionTiles; dx++) {
         const nx = this.x + dx;
         const ny = this.y + dy;
         if (!world.inBounds(nx, ny)) continue;
-        if (foodVisible < 1 && world.hasFood(nx, ny)) foodVisible = 1;
+        const d = dx * dx + dy * dy;
+        if (world.hasFood(nx, ny)) {
+          if (foodVisible < 1) foodVisible = 1;
+          if (d < bestFoodD) { bestFoodD = d; bestFoodDx = dx; bestFoodDy = dy; }
+        }
         const a = world.animalAtTile(nx, ny);
         if (a && a !== this) {
           if (a.isCarnivore()) predClose = 1;
-          else preyClose = 1;
+          else {
+            preyClose = 1;
+            if (carnivore && d < bestPreyD) { bestPreyD = d; bestPreyDx = dx; bestPreyDy = dy; }
+          }
         }
         const h = world.humanAt[world.idx(nx, ny)];
-        if (h && h.alive) humanClose = 1;
+        if (h && h.alive) {
+          humanClose = 1;
+          if (carnivore && d < bestPreyD) { bestPreyD = d; bestPreyDx = dx; bestPreyDy = dy; }
+        }
       }
     }
     const inputs = new Float32Array([
@@ -191,6 +206,17 @@ export class Animal {
     ]);
     const brainOut = this.brain.think(inputs);
 
+    // Reflex: when really hungry, step straight toward the nearest
+    // food (herbivores) or prey (carnivores) if any is visible. Brain
+    // still ran above so its hidden state stays in sync, but it does
+    // not get to veto survival.
+    const starving = this.hunger < 0.5;
+    let reflexTarget = null;
+    if (starving) {
+      if (!carnivore && bestFoodD < Infinity) reflexTarget = [bestFoodDx, bestFoodDy];
+      else if (carnivore && bestPreyD < Infinity) reflexTarget = [bestPreyDx, bestPreyDy];
+    }
+
     // Score every move: brain output for that direction + a small
     // hand-coded survival prior, so even random brains still avoid
     // walking into walls or onto a predator.
@@ -202,7 +228,7 @@ export class Animal {
       const ny = this.y + dy;
       const isStay = dx === 0 && dy === 0;
       if (!isStay && !world.canAnimalStand(nx, ny)) continue;
-      let score = brainOut[i] + rand() * 0.05;
+      let score = brainOut[i] * 0.6 + rand() * 0.05;
       if (!isStay) {
         if (world.hasFood(nx, ny)) score += carnivore ? 0.2 : 1.2;
         if (world.microbe[world.idx(nx, ny)] === 1 && !carnivore) score += 0.2;
@@ -211,6 +237,14 @@ export class Animal {
           // can't actually step onto an occupied tile, but adjacency
           // still informs the brain's bias for next tick.
           score -= 0.4;
+        }
+        if (reflexTarget) {
+          // Strong pull toward the reflex direction (sign-aligned step).
+          const sx = Math.sign(reflexTarget[0]);
+          const sy = Math.sign(reflexTarget[1]);
+          if ((sx === 0 || Math.sign(dx) === sx) && (sy === 0 || Math.sign(dy) === sy)) {
+            score += 2.0;
+          }
         }
       }
       if (score > bestScore) { bestScore = score; best = [nx, ny]; }
