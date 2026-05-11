@@ -31,7 +31,7 @@ body {
 
 #app {
   display: grid;
-  grid-template-columns: 320px 1fr;
+  grid-template-columns: 340px 1fr;
   height: 100vh;
 }
 
@@ -46,6 +46,7 @@ body {
   padding: 16px 0 6px;
   border-bottom: 1px solid var(--border);
   margin-bottom: 10px;
+  position: relative;
 }
 
 #sidebar header h1 {
@@ -56,6 +57,139 @@ body {
   -webkit-background-clip: text;
   background-clip: text;
   -webkit-text-fill-color: transparent;
+}
+
+.help-btn {
+  position: absolute;
+  right: 0;
+  top: 12px;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+  padding: 0;
+  cursor: pointer;
+}
+
+.help-btn:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(7, 14, 22, 0.78);
+  backdrop-filter: blur(2px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+}
+
+.overlay.hidden { display: none; }
+
+.overlay-card {
+  position: relative;
+  max-width: 560px;
+  width: calc(100% - 32px);
+  max-height: 80vh;
+  overflow-y: auto;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 22px 26px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.overlay-card h2 {
+  margin-top: 0;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.overlay-card h3 {
+  margin: 16px 0 4px;
+  font-size: 12px;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.overlay-card ul,
+.overlay-card ol {
+  margin: 4px 0;
+  padding-left: 22px;
+}
+
+.overlay-card li {
+  margin: 2px 0;
+}
+
+.overlay-close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  font-size: 18px;
+  line-height: 1;
+  padding: 0;
+}
+
+.event-log {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 280px;
+  max-height: 220px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  pointer-events: none;
+}
+
+.event-log .ev {
+  background: rgba(10, 14, 22, 0.85);
+  border: 1px solid var(--border);
+  border-left-width: 3px;
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: 11px;
+  opacity: 0;
+  animation: ev-in 0.25s forwards;
+}
+
+.event-log .ev.fade {
+  animation: ev-out 0.5s forwards;
+}
+
+.event-log .ev.kingdom { border-left-color: var(--accent); }
+.event-log .ev.war { border-left-color: var(--danger); }
+.event-log .ev.tech { border-left-color: var(--accent-2); }
+.event-log .ev.disaster { border-left-color: var(--warn); }
+.event-log .ev.era { border-left-color: #e056ff; }
+.event-log .ev.build { border-left-color: #9a7bff; }
+
+@keyframes ev-in {
+  from { opacity: 0; transform: translateX(8px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+@keyframes ev-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
 }
 
 .tag {
@@ -187,6 +321,94 @@ button.primary:hover {
   text-align: right;
 }
 
+/* Peoples panel — one row per living kingdom */
+.peoples {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.people {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-left-width: 4px;
+  border-radius: 5px;
+  padding: 6px 8px;
+  font-size: 11px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.people .people-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.people .banner {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 1px solid rgba(0, 0, 0, 0.4);
+  flex: none;
+}
+
+.people .name {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.people .rel {
+  font-size: 13px;
+}
+
+.people .people-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.people .people-stats .at-war {
+  color: var(--danger);
+}
+
+.people .roles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  font-size: 10px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+.people .roles span {
+  background: var(--bg-2);
+  padding: 0 4px;
+  border-radius: 3px;
+}
+
+.people .genes {
+  display: flex;
+  gap: 4px;
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.people .genes span {
+  background: var(--bg-2);
+  padding: 0 4px;
+  border-radius: 3px;
+}
+
 #main {
   position: relative;
   overflow: hidden;
@@ -263,6 +485,21 @@ canvas {
 
 #inspect .label {
   color: var(--muted);
+}
+
+#inspect .gene-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 2px;
+}
+
+#inspect .gene-row span {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0 4px;
+  font-size: 11px;
 }
 
 [data-disaster] {

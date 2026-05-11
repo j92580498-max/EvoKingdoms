@@ -1,0 +1,26 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Syntax-check all JS modules
+        run: |
+          for f in js/*.js; do
+            echo "checking $f"
+            node --check "$f"
+          done
+      - name: Basic HTML/CSS sanity
+        run: |
+          test -f index.html
+          test -f styles.css
+          grep -q '<canvas id="canvas"' index.html
+          grep -q "js/main.js" index.html

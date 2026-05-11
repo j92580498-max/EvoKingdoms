@@ -20,6 +20,7 @@ class Game {
     this.lastEra = "primordial";
     this.toastEl = document.getElementById("toast");
     this.toastTimeout = null;
+    this._lastEventIdx = 0;
   }
 
   setZoom(px) { this.renderer.setZoom(px); }
@@ -29,6 +30,9 @@ class Game {
     this.world.seedLife();
     this.renderer.setWorld(this.world);
     this.renderer.resize();
+    this._lastEventIdx = 0;
+    const log = document.getElementById("event-log");
+    if (log) log.innerHTML = "";
     this.toast("World reset.");
   }
 
@@ -52,7 +56,6 @@ class Game {
     if (!this.paused) {
       const tickInterval = 1000 / this.targetTPS;
       this.tickAcc += dt;
-      // safety cap to avoid spiral-of-death after a long tab pause
       let budget = 0;
       while (this.tickAcc >= tickInterval && budget < this.targetTPS / 4 + 4) {
         this.world.step();
@@ -73,8 +76,29 @@ class Game {
       const s = computeStats(this.world);
       renderStats(s, document.getElementById("stats"));
     }
+    if ((this.world.tick & 31) === 0) {
+      this.ui.renderPeoples();
+    }
 
+    this.flushEventLog();
     requestAnimationFrame(() => this.loop());
+  }
+
+  flushEventLog() {
+    const log = this.world.eventLog;
+    if (log.length === this._lastEventIdx) return;
+    const el = document.getElementById("event-log");
+    if (!el) return;
+    while (this._lastEventIdx < log.length) {
+      const ev = log[this._lastEventIdx++];
+      const div = document.createElement("div");
+      div.className = `ev ${ev.type}`;
+      div.textContent = ev.msg;
+      el.appendChild(div);
+      setTimeout(() => div.classList.add("fade"), 5500);
+      setTimeout(() => div.remove(), 6200);
+      while (el.children.length > 6) el.firstElementChild.remove();
+    }
   }
 
   start() {
