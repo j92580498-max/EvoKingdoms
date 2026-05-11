@@ -699,6 +699,10 @@ export class Kingdom {
     this.techTier = 0;
     this.warTarget = null;
     this.warTicks = 0;
+    // Ticks remaining before this kingdom may declare another war.
+    // Without a cooldown the same kingdoms re-ignite wars instantly,
+    // which kept the population in permanent attrition.
+    this.warCooldown = 0;
     this.tilesClaimed = 0;
     this.buildings = [];
     this.history = [];
@@ -739,15 +743,21 @@ export class Kingdom {
 
     if ((world.tick & 63) === 0) this.advanceTech(world);
 
+    if (this.warCooldown > 0) this.warCooldown--;
+
     if (!this.warTarget) {
+      if (this.warCooldown > 0) return;
       let agg = 0;
       let n = 0;
       for (const h of world.humans) {
         if (h.alive && h.kingdom === this) { agg += h.genes.agg; n++; }
       }
       const meanAgg = n ? agg / n : 0.5;
-      if (chance(CONFIG.WAR_DECLARE_CHANCE * Math.max(this.population, 1) * 0.2 * (0.5 + meanAgg))) {
-        const enemies = world.kingdoms.filter((k) => k !== this && k.population > 0);
+      // Cap the population multiplier so a single big kingdom doesn't
+      // keep the entire map in permanent war.
+      const popFactor = Math.min(this.population, 20);
+      if (chance(CONFIG.WAR_DECLARE_CHANCE * popFactor * 0.2 * (0.5 + meanAgg))) {
+        const enemies = world.kingdoms.filter((k) => k !== this && k.population > 0 && k.warCooldown <= 0 && !k.warTarget);
         if (enemies.length) {
           const enemy = pick(enemies);
           this.warTarget = enemy;
@@ -771,6 +781,8 @@ export class Kingdom {
         const dead = this.warTarget;
         this.warTarget = null;
         dead.warTarget = null;
+        this.warCooldown = CONFIG.WAR_COOLDOWN_TICKS;
+        dead.warCooldown = CONFIG.WAR_COOLDOWN_TICKS;
       } else if (chance(CONFIG.WAR_END_CHANCE)) {
         world.eventLog.push({
           tick: world.tick,
@@ -780,6 +792,8 @@ export class Kingdom {
         const enemy = this.warTarget;
         this.warTarget = null;
         if (enemy.warTarget === this) enemy.warTarget = null;
+        this.warCooldown = CONFIG.WAR_COOLDOWN_TICKS;
+        enemy.warCooldown = CONFIG.WAR_COOLDOWN_TICKS;
       }
     }
   }
