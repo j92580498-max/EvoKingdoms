@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>EvoKingdoms — Life · Evolution · Kingdoms</title>
+    <link rel="stylesheet" href="styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%23103030'/%3E%3Ccircle cx='8' cy='8' r='4' fill='%2356c272'/%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <div id="app">
+      <aside id="sidebar">
+        <header>
+          <h1>EvoKingdoms</h1>
+          <p class="tag">Life · Evolution · Kingdoms</p>
+        </header>
+
+        <section class="block">
+          <h2>Simulation</h2>
+          <div class="row">
+            <button id="btn-pause" class="primary">⏸ Pause</button>
+            <button id="btn-step">⏭ Step</button>
+            <button id="btn-reset">↻ Reset</button>
+          </div>
+          <label class="slider">
+            Speed
+            <input id="speed" type="range" min="1" max="240" value="60" />
+            <span id="speed-val">60 ticks/s</span>
+          </label>
+          <label class="slider">
+            Zoom
+            <input id="zoom" type="range" min="2" max="20" value="6" step="1" />
+            <span id="zoom-val">6×</span>
+          </label>
+        </section>
+
+        <section class="block">
+          <h2>Era</h2>
+          <div class="row">
+            <button id="btn-era-advance">Advance Era ▶</button>
+          </div>
+          <div class="era-info">
+            <span id="era-name">Primordial</span>
+            <span id="era-desc" class="muted">Only cells exist. Mutation & selection.</span>
+          </div>
+        </section>
+
+        <section class="block">
+          <h2>Tools</h2>
+          <div class="tools" id="tools">
+            <button data-tool="inspect" class="tool active">🔍 Inspect</button>
+            <button data-tool="grass" class="tool">🌿 Grass</button>
+            <button data-tool="water" class="tool">💧 Water</button>
+            <button data-tool="sand" class="tool">🏖 Sand</button>
+            <button data-tool="mountain" class="tool">⛰ Mountain</button>
+            <button data-tool="lava" class="tool">🔥 Lava</button>
+            <button data-tool="food" class="tool">🍞 Food</button>
+            <button data-tool="organism" class="tool">🦠 Organism</button>
+            <button data-tool="human" class="tool">🧑 Human</button>
+            <button data-tool="kill" class="tool">☠ Kill</button>
+          </div>
+          <label class="slider">
+            Brush
+            <input id="brush" type="range" min="1" max="12" value="3" />
+            <span id="brush-val">3</span>
+          </label>
+        </section>
+
+        <section class="block">
+          <h2>Disasters</h2>
+          <div class="row wrap">
+            <button data-disaster="meteor">☄ Meteor</button>
+            <button data-disaster="earthquake">🌋 Quake</button>
+            <button data-disaster="plague">☣ Plague</button>
+            <button data-disaster="flood">🌊 Flood</button>
+            <button data-disaster="rapture">✨ Rapture</button>
+          </div>
+        </section>
+
+        <section class="block">
+          <h2>Stats</h2>
+          <div id="stats" class="stats"></div>
+        </section>
+
+        <section class="block" id="inspect-block">
+          <h2>Inspector</h2>
+          <div id="inspect" class="muted">Click a tile to inspect.</div>
+        </section>
+
+        <footer>
+          <a href="https://github.com/j92580498-max/EvoKingdoms" target="_blank" rel="noreferrer">github / EvoKingdoms</a>
+        </footer>
+      </aside>
+
+      <main id="main">
+        <canvas id="canvas"></canvas>
+        <div id="hover" class="hover-tag"></div>
+        <div id="toast" class="toast"></div>
+      </main>
+    </div>
+
+    <script type="module" src="js/main.js"></script>
+  </body>
+</html>
