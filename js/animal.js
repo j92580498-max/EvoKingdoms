@@ -4,6 +4,15 @@
 
 import { CONFIG, TERRAIN } from "./config.js";
 import { chance, rand, randInt, pick, clamp, jitter, NEIGHBORS_4, NEIGHBORS_8 } from "./utils.js";
+import { newAnimalBrain } from "./brain.js";
+
+// Directional offsets that line up with the animal brain's 9 movement
+// outputs in the order [NW, N, NE, W, stay, E, SW, S, SE].
+const ANIMAL_MOVES = [
+  [-1, -1], [0, -1], [1, -1],
+  [-1,  0], [0,  0], [1,  0],
+  [-1,  1], [0,  1], [1,  1],
+];
 
 let animalId = 1;
 
@@ -35,7 +44,7 @@ export function inheritAnimalGenes(parent, rate = CONFIG.ANIMAL_GENE_MUTATE_RATE
 }
 
 export class Animal {
-  constructor(x, y, speciesKey, genes) {
+  constructor(x, y, speciesKey, genes, brain = null) {
     this.id = animalId++;
     this.x = x;
     this.y = y;
@@ -46,6 +55,11 @@ export class Animal {
     this.lifespan = CONFIG.ANIMAL_LIFESPAN + randInt(-200, 200);
     this.alive = true;
     this.moveCooldown = randInt(0, CONFIG.ANIMAL_MOVE_INTERVAL);
+    // Brain: tiny neural net that scores 8 movement directions + stay.
+    // Inherited with mutation through `tryReproduce`; selection picks
+    // out the wirings that find food and avoid predators best.
+    this.brain = brain || newAnimalBrain();
+    this.brain.reset();
   }
 
   def() { return SPECIES[this.species]; }
@@ -142,43 +156,66 @@ export class Animal {
   }
 
   moveStep(world) {
-    let best = null;
-    let bestScore = -Infinity;
-    const range = 1;
-    for (let dy = -range; dy <= range; dy++) {
-      for (let dx = -range; dx <= range; dx++) {
-        if (dx === 0 && dy === 0) continue;
+    const carnivore = this.isCarnivore();
+    // Coarse 9-tile senses driven by genes.vision. Each is in {-1, +1}.
+    const visionTiles = Math.max(1, (this.genes.vision * 6) | 0);
+    let foodHere = world.hasFood(this.x, this.y) ? 1 : -1;
+    let foodVisible = -1;
+    let predClose = -1;
+    let preyClose = -1;
+    let humanClose = -1;
+    for (let dy = -visionTiles; dy <= visionTiles; dy++) {
+      for (let dx = -visionTiles; dx <= visionTiles; dx++) {
         const nx = this.x + dx;
         const ny = this.y + dy;
-        if (!world.canAnimalStand(nx, ny)) continue;
-        let score = rand() * 0.3;
-        if (this.isCarnivore()) {
-          // predator: seek prey
-          for (let r = 1; r <= Math.max(1, (this.genes.vision * 5) | 0); r++) {
-            const tx = nx + dx * r;
-            const ty = ny + dy * r;
-            if (!world.inBounds(tx, ty)) break;
-            const a = world.animalAtTile(tx, ty);
-            if (a && !a.isCarnivore()) { score += 2 / r; break; }
-            const h = world.humanAt[world.idx(tx, ty)];
-            if (h && h.alive) { score += 0.7 / r; break; }
-          }
-        } else {
-          // herbivore: seek food, flee predators
-          if (world.hasFood(nx, ny)) score += 2;
-          if (world.microbe[world.idx(nx, ny)] === 1) score += 0.3;
-          for (let r = 1; r <= Math.max(1, (this.genes.vision * 6) | 0); r++) {
-            const tx = nx + dx * r;
-            const ty = ny + dy * r;
-            if (!world.inBounds(tx, ty)) break;
-            const a = world.animalAtTile(tx, ty);
-            if (a && a.isCarnivore()) { score -= 3 / r; break; }
-          }
+        if (!world.inBounds(nx, ny)) continue;
+        if (foodVisible < 1 && world.hasFood(nx, ny)) foodVisible = 1;
+        const a = world.animalAtTile(nx, ny);
+        if (a && a !== this) {
+          if (a.isCarnivore()) predClose = 1;
+          else preyClose = 1;
         }
-        if (score > bestScore) { bestScore = score; best = [nx, ny]; }
+        const h = world.humanAt[world.idx(nx, ny)];
+        if (h && h.alive) humanClose = 1;
       }
     }
-    if (best) {
+    const inputs = new Float32Array([
+      clamp(this.hunger - 1.0, -1, 1),
+      carnivore ? 1 : -1,
+      foodHere,
+      foodVisible,
+      predClose,
+      preyClose,
+      humanClose,
+      clamp((this.age / this.lifespan) * 2 - 1, -1, 1),
+    ]);
+    const brainOut = this.brain.think(inputs);
+
+    // Score every move: brain output for that direction + a small
+    // hand-coded survival prior, so even random brains still avoid
+    // walking into walls or onto a predator.
+    let best = null;
+    let bestScore = -Infinity;
+    for (let i = 0; i < ANIMAL_MOVES.length; i++) {
+      const [dx, dy] = ANIMAL_MOVES[i];
+      const nx = this.x + dx;
+      const ny = this.y + dy;
+      const isStay = dx === 0 && dy === 0;
+      if (!isStay && !world.canAnimalStand(nx, ny)) continue;
+      let score = brainOut[i] + rand() * 0.05;
+      if (!isStay) {
+        if (world.hasFood(nx, ny)) score += carnivore ? 0.2 : 1.2;
+        if (world.microbe[world.idx(nx, ny)] === 1 && !carnivore) score += 0.2;
+        const a = world.animalAtTile(nx, ny);
+        if (a) {
+          // can't actually step onto an occupied tile, but adjacency
+          // still informs the brain's bias for next tick.
+          score -= 0.4;
+        }
+      }
+      if (score > bestScore) { bestScore = score; best = [nx, ny]; }
+    }
+    if (best && (best[0] !== this.x || best[1] !== this.y)) {
       world.setAnimalAt(this.x, this.y, null);
       this.x = best[0];
       this.y = best[1];
@@ -192,7 +229,12 @@ export class Animal {
       const ny = this.y + dy;
       if (!world.canAnimalStand(nx, ny)) continue;
       this.hunger -= CONFIG.ANIMAL_REPRODUCE_COST;
-      const child = new Animal(nx, ny, this.species, inheritAnimalGenes(this.genes));
+      const childGenes = inheritAnimalGenes(this.genes);
+      // Brain inheritance: asexual mutation (animals don't pair here).
+      // Smarter (higher-vision) animals mutate a little less.
+      const brainRate = CONFIG.ANIMAL_GENE_MUTATE_RATE * (1.2 - 0.4 * childGenes.vision);
+      const childBrain = this.brain.mutated(brainRate);
+      const child = new Animal(nx, ny, this.species, childGenes, childBrain);
       child.hunger = 0.8;
       world.animals.push(child);
       world.setAnimalAt(nx, ny, child);

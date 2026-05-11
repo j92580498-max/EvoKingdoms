@@ -15,6 +15,7 @@ import {
   pickCulture, pickReligion,
   randomHumanGenes, inheritGenes,
 } from "./utils.js";
+import { newHumanBrain, HUMAN_OUTPUT_NAMES } from "./brain.js";
 
 let humanId = 1;
 let kingdomId = 1;
@@ -38,7 +39,7 @@ const TASK_TTL = {
 };
 
 export class Human {
-  constructor(x, y, kingdom = null, genes = null) {
+  constructor(x, y, kingdom = null, genes = null, brain = null) {
     this.id = humanId++;
     this.x = x;
     this.y = y;
@@ -59,6 +60,13 @@ export class Human {
     this.role = pickRole(this.genes);
     this.task = null;          // { kind, tx, ty, ttl }
     this.thinkCooldown = randInt(0, 20);
+    // Brain: a small neural network that biases task selection. Random
+    // by default; inherited (with mutation) from parents on birth.
+    this.brain = brain || newHumanBrain();
+    this.brain.reset();
+    // Filled in by pickTask so the inspector can show what the brain
+    // most recently decided to do.
+    this.lastBrainBias = null;
   }
 
   carryTotal() {
@@ -146,9 +154,17 @@ export class Human {
     }
   }
 
-  /** Decide what to do next based on need × role priorities. */
+  /** Decide what to do next based on need × role priorities, biased by
+   *  what this human's brain has learned to prefer across generations.
+   *
+   *  Each candidate task starts with a hard-coded utility score (need is
+   *  food, the kingdom is short on stone, we are at war, …). The brain
+   *  contributes an additive bias per task kind. Picks above a small
+   *  threshold are executed; ties resolve toward higher-score options.
+   *  Lethal threats (a predator within 4 tiles) short-circuit the
+   *  scoring entirely — fleeing is reflex, not deliberation. */
   pickTask(world) {
-    // 0. Flee predator within 4 tiles. Warriors stand and fight instead.
+    // 0. Reflex: flee predator within 4 tiles. Warriors stand and fight.
     const pred = this.findNearest(world, 4, (x, y) => {
       const a = world.animalAtTile(x, y);
       return a && a.alive && a.isCarnivore();
@@ -165,23 +181,35 @@ export class Human {
       return;
     }
 
-    // 1. Hungry: find food.
-    if (this.hunger < 0.75) {
+    // 1. Senses → inputs → brain.
+    const bias = this.brainStep(world);
+
+    // 2. Build a candidate list with (score, factory) entries.
+    const candidates = [];
+    const push = (kind, score, mk) => {
+      if (!mk) return;
+      candidates.push({ kind, score: score + (bias[kind] || 0), make: mk });
+    };
+
+    // Hungry: find food.
+    if (this.hunger < 1.1) {
       const t = this.findNearest(world, 12, (x, y) => world.hasFood(x, y));
       if (t) {
-        this.task = { kind: "eat", tx: t[0], ty: t[1], ttl: TASK_TTL.eat };
-        return;
+        const urgency = clamp(1.4 - this.hunger, 0, 1.4);
+        push("eat", 0.4 + urgency * 1.5, () => ({ kind: "eat", tx: t[0], ty: t[1], ttl: TASK_TTL.eat }));
       }
     }
 
-    // 2. Carrying full: head home to deposit.
-    if (this.kingdom && this.carryTotal() >= CONFIG.HUMAN_CARRY_MAX) {
+    // Carrying load: head home to deposit.
+    if (this.kingdom && this.carryTotal() > 0) {
       const home = this.kingdom.depositTarget(this);
-      this.task = { kind: "deposit", tx: home.x, ty: home.y, ttl: TASK_TTL.deposit };
-      return;
+      const fullness = this.carryTotal() / CONFIG.HUMAN_CARRY_MAX;
+      push("deposit", 0.2 + fullness * 1.6, () => ({
+        kind: "deposit", tx: home.x, ty: home.y, ttl: TASK_TTL.deposit,
+      }));
     }
 
-    // 3. At war + warrior/raider: hunt enemy citizens.
+    // At war + warrior/raider: hunt enemy citizens.
     if (this.kingdom && this.kingdom.warTarget && (this.role === "warrior" || this.role === "raider")) {
       const enemy = this.kingdom.warTarget;
       const t = this.findNearest(world, 14, (x, y) => {
@@ -189,25 +217,25 @@ export class Human {
         return !!(h && h.alive && h.kingdom === enemy);
       });
       if (t) {
-        this.task = { kind: "attack", tx: t[0], ty: t[1], ttl: TASK_TTL.attack };
-        return;
+        push("attack", 1.0 + this.genes.agg * 0.6, () => ({ kind: "attack", tx: t[0], ty: t[1], ttl: TASK_TTL.attack }));
       }
-      this.task = { kind: "march", tx: enemy.capital.x, ty: enemy.capital.y, ttl: TASK_TTL.march };
-      return;
+      push("march", 0.5 + this.genes.agg * 0.4, () => ({
+        kind: "march", tx: enemy.capital.x, ty: enemy.capital.y, ttl: TASK_TTL.march,
+      }));
     }
 
-    // 4. Priest: pray at the nearest shrine (small piety boost).
-    if (this.role === "priest" && this.kingdom) {
+    // Priest: pray at the nearest shrine.
+    if (this.kingdom) {
       const shrine = this.kingdom.buildings.find((b) => b.kind === "shrine");
       if (shrine) {
-        this.task = { kind: "pray", tx: shrine.x, ty: shrine.y, ttl: TASK_TTL.pray };
-        return;
+        const roleBoost = this.role === "priest" ? 0.6 : 0.0;
+        push("pray", 0.2 + this.genes.faith * 0.8 + roleBoost, () => ({
+          kind: "pray", tx: shrine.x, ty: shrine.y, ttl: TASK_TTL.pray,
+        }));
       }
     }
 
-    // 5. Harvester / forager / scholar / mother / raider all gather
-    //    resources when not otherwise occupied. Need-based: kingdom decides
-    //    which resource is rarest right now.
+    // Harvest resources when there is room to carry more.
     if (this.kingdom && this.carryTotal() < CONFIG.HUMAN_CARRY_MAX) {
       const need = this.kingdom.mostNeededResource();
       const known = (
@@ -215,25 +243,31 @@ export class Human {
         need === "stone" ? this.kingdom.knownStone :
         this.kingdom.knownIron
       );
-      // Prefer known tiles from kingdom memory.
-      const tile = this.pickClosestKnown(world, known);
-      if (tile) {
-        this.task = { kind: "harvest", tx: tile[0], ty: tile[1], ttl: TASK_TTL.harvest };
-        return;
+      let tile = this.pickClosestKnown(world, known);
+      if (!tile) {
+        tile = this.findNearest(world, 10, (x, y) => (
+          (need === "wood"  && world.hasWood(x, y))  ||
+          (need === "stone" && world.hasStone(x, y)) ||
+          (need === "iron"  && world.hasIron(x, y))
+        ));
       }
-      // Fallback: scout for any unknown resource tile in vision.
-      const scan = this.findNearest(world, 10, (x, y) => (
-        (need === "wood"  && world.hasWood(x, y))  ||
-        (need === "stone" && world.hasStone(x, y)) ||
-        (need === "iron"  && world.hasIron(x, y))
-      ));
-      if (scan) {
-        this.task = { kind: "harvest", tx: scan[0], ty: scan[1], ttl: TASK_TTL.harvest };
-        return;
+      if (tile) {
+        push("harvest", 0.6, () => ({ kind: "harvest", tx: tile[0], ty: tile[1], ttl: TASK_TTL.harvest }));
       }
     }
 
-    // 6. Default: wander within own territory.
+    // 3. Pick the top scorer. If nothing scored well, wander.
+    let best = null;
+    for (const c of candidates) {
+      if (!best || c.score > best.score) best = c;
+    }
+    this.lastBrainBias = bias;
+    if (best && best.score > 0.25) {
+      this.task = best.make();
+      return;
+    }
+
+    // 4. Default: scored wander, mildly drifting toward home if we have one.
     if (this.kingdom) {
       const tx = this.kingdom.capital.x + randInt(-8, 8);
       const ty = this.kingdom.capital.y + randInt(-8, 8);
@@ -241,6 +275,61 @@ export class Human {
     } else {
       this.task = { kind: "wander", tx: this.x + randInt(-4, 4), ty: this.y + randInt(-4, 4), ttl: TASK_TTL.wander };
     }
+  }
+
+  /** Sense the world, run the brain forward one step, and return an
+   *  object mapping each output name to its [-1, 1] activation. */
+  brainStep(world) {
+    const k = this.kingdom;
+    // Sensory inputs, all in roughly [-1, 1] so the brain stays in its
+    // sweet spot.
+    const hunger = clamp(this.hunger - 1.0, -1, 1);
+    const carry  = (this.carryTotal() / CONFIG.HUMAN_CARRY_MAX) * 2 - 1;
+    const foodNear  = this.senseNear(world, 4, (x, y) => world.hasFood(x, y));
+    const predNear  = this.senseNear(world, 5, (x, y) => {
+      const a = world.animalAtTile(x, y);
+      return !!(a && a.alive && a.isCarnivore());
+    });
+    const enemyNear = (k && k.warTarget) ? this.senseNear(world, 6, (x, y) => {
+      const h = world.humanAt[world.idx(x, y)];
+      return !!(h && h.alive && h.kingdom === k.warTarget);
+    }) : -1;
+    const woodNear  = this.senseNear(world, 4, (x, y) => world.hasWood(x, y));
+    const stoneNear = this.senseNear(world, 5, (x, y) => world.hasStone(x, y));
+    const ironNear  = this.senseNear(world, 5, (x, y) => world.hasIron(x, y));
+    const needWood  = k ? (k.mostNeededResource() === "wood"  ? 1 : -1) : 0;
+    const needStone = k ? (k.mostNeededResource() === "stone" ? 1 : -1) : 0;
+    const needIron  = k ? (k.mostNeededResource() === "iron"  ? 1 : -1) : 0;
+    const atWar     = k && k.warTarget ? 1 : -1;
+    const ageNorm   = clamp((this.age / this.lifespan) * 2 - 1, -1, 1);
+    const smarts    = this.genes.smarts * 2 - 1;
+
+    const inputs = new Float32Array([
+      hunger, carry, foodNear, predNear,
+      enemyNear, woodNear, stoneNear, ironNear,
+      needWood, needStone, needIron, atWar,
+      ageNorm, smarts,
+    ]);
+    const out = this.brain.think(inputs);
+    const bias = {};
+    for (let i = 0; i < HUMAN_OUTPUT_NAMES.length; i++) {
+      bias[HUMAN_OUTPUT_NAMES[i]] = out[i];
+    }
+    return bias;
+  }
+
+  /** Returns 1 if any tile in the square radius around the human
+   *  matches `predicate`, else -1. */
+  senseNear(world, radius, predicate) {
+    for (let dy = -radius; dy <= radius; dy++) {
+      for (let dx = -radius; dx <= radius; dx++) {
+        const nx = this.x + dx;
+        const ny = this.y + dy;
+        if (!world.inBounds(nx, ny)) continue;
+        if (predicate(nx, ny)) return 1;
+      }
+    }
+    return -1;
   }
 
   /** Walk one tile (8-connected) toward the task target. Falls back to
@@ -451,7 +540,12 @@ export class Human {
         childGenes.smarts = clamp(childGenes.smarts + 0.04, 0, 1);
         childGenes.faith  = clamp(childGenes.faith  + 0.02, 0, 1);
       }
-      const child = new Human(nx, ny, this.kingdom, childGenes);
+      // Brain inheritance: uniform crossover with the partner if any,
+      // then mutation. Smarter humans mutate a little less, so a
+      // working brain is preserved more reliably.
+      const brainRate = CONFIG.HUMAN_GENE_MUTATE_RATE * (1.2 - 0.4 * childGenes.smarts);
+      const childBrain = this.brain.childWith(partner ? partner.brain : null, brainRate);
+      const child = new Human(nx, ny, this.kingdom, childGenes, childBrain);
       child.hunger = CONFIG.HUMAN_BABY_HUNGER;
       child.generation = (this.generation || 1) + 1;
       world.humans.push(child);
