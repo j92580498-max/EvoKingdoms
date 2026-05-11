@@ -389,6 +389,13 @@ export class World {
     this.era = "sentient";
     this.eventLog.push({ tick: this.tick, type: "era", msg: "The Sentient Era has begun — humans awaken!" });
     import("./civilization.js").then(({ Human }) => {
+      // Stagger the starting age of the initial generation so they
+      // don't all die of old age within the same handful of ticks
+      // (which previously collapsed the whole population just as
+      // wars were ending).
+      const spreadAge = (h) => {
+        h.age = randInt(0, Math.floor(h.lifespan * 0.4));
+      };
       const best = [...this.organisms]
         .filter((o) => o.alive)
         .sort((a, b) => b.cells.length - a.cells.length)
@@ -401,6 +408,7 @@ export class World {
           const y = o.y + dy;
           if (this.canHumanStand(x, y)) {
             const h = new Human(x, y);
+            spreadAge(h);
             this.humans.push(h);
             this.setHumanAt(x, y, h);
             spawned++;
@@ -414,6 +422,7 @@ export class World {
         const y = randInt(2, this.H - 3);
         if (!this.canHumanStand(x, y)) continue;
         const h = new Human(x, y);
+        spreadAge(h);
         this.humans.push(h);
         this.setHumanAt(x, y, h);
         spawned++;

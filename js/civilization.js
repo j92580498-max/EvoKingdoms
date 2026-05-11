@@ -159,12 +159,12 @@ export class Human {
    *
    *  Each candidate task starts with a hard-coded utility score (need is
    *  food, the kingdom is short on stone, we are at war, …). The brain
-   *  contributes an additive bias per task kind. Picks above a small
-   *  threshold are executed; ties resolve toward higher-score options.
-   *  Lethal threats (a predator within 4 tiles) short-circuit the
-   *  scoring entirely — fleeing is reflex, not deliberation. */
+   *  contributes a *small* additive bias per task kind on top of those
+   *  scores — it nudges priorities, it does not override them. Lethal
+   *  threats (predator nearby) and starvation short-circuit the scoring
+   *  entirely; those are reflexes, not deliberation. */
   pickTask(world) {
-    // 0. Reflex: flee predator within 4 tiles. Warriors stand and fight.
+    // 0a. Reflex: flee predator within 4 tiles. Warriors stand and fight.
     const pred = this.findNearest(world, 4, (x, y) => {
       const a = world.animalAtTile(x, y);
       return a && a.alive && a.isCarnivore();
@@ -181,8 +181,26 @@ export class Human {
       return;
     }
 
-    // 1. Senses → inputs → brain.
-    const bias = this.brainStep(world);
+    // 0b. Reflex: starving — eat anything nearby regardless of brain.
+    // Random initial brains can otherwise suppress the eat output, which
+    // tipped the first generation into mass starvation.
+    if (this.hunger < 0.6) {
+      const t = this.findNearest(world, 14, (x, y) => world.hasFood(x, y));
+      if (t) {
+        this.task = { kind: "eat", tx: t[0], ty: t[1], ttl: TASK_TTL.eat };
+        // Still run the brain so its hidden state and inspector
+        // visualisation stay in sync with the world.
+        this.lastBrainBias = this.brainStep(world);
+        return;
+      }
+    }
+
+    // 1. Senses → inputs → brain. Brain output is in [-1, 1]; we scale
+    //    it down so deliberation only nudges hand-coded utilities.
+    const rawBias = this.brainStep(world);
+    const BIAS_GAIN = 0.5;
+    const bias = {};
+    for (const k of Object.keys(rawBias)) bias[k] = rawBias[k] * BIAS_GAIN;
 
     // 2. Build a candidate list with (score, factory) entries.
     const candidates = [];
@@ -191,12 +209,13 @@ export class Human {
       candidates.push({ kind, score: score + (bias[kind] || 0), make: mk });
     };
 
-    // Hungry: find food.
-    if (this.hunger < 1.1) {
-      const t = this.findNearest(world, 12, (x, y) => world.hasFood(x, y));
+    // Hungry: find food. The score grows steeply as hunger drops so it
+    // dominates other candidates well before starvation.
+    if (this.hunger < 1.2) {
+      const t = this.findNearest(world, 14, (x, y) => world.hasFood(x, y));
       if (t) {
         const urgency = clamp(1.4 - this.hunger, 0, 1.4);
-        push("eat", 0.4 + urgency * 1.5, () => ({ kind: "eat", tx: t[0], ty: t[1], ttl: TASK_TTL.eat }));
+        push("eat", 0.8 + urgency * 2.2, () => ({ kind: "eat", tx: t[0], ty: t[1], ttl: TASK_TTL.eat }));
       }
     }
 
@@ -256,13 +275,14 @@ export class Human {
       }
     }
 
-    // 3. Pick the top scorer. If nothing scored well, wander.
+    // 3. Pick the top scorer. Brain bias can dip a candidate below
+    //    zero, so we accept anything that beats wander's noise floor.
     let best = null;
     for (const c of candidates) {
       if (!best || c.score > best.score) best = c;
     }
     this.lastBrainBias = bias;
-    if (best && best.score > 0.25) {
+    if (best && best.score > -0.1) {
       this.task = best.make();
       return;
     }
@@ -679,6 +699,10 @@ export class Kingdom {
     this.techTier = 0;
     this.warTarget = null;
     this.warTicks = 0;
+    // Ticks remaining before this kingdom may declare another war.
+    // Without a cooldown the same kingdoms re-ignite wars instantly,
+    // which kept the population in permanent attrition.
+    this.warCooldown = 0;
     this.tilesClaimed = 0;
     this.buildings = [];
     this.history = [];
@@ -719,15 +743,21 @@ export class Kingdom {
 
     if ((world.tick & 63) === 0) this.advanceTech(world);
 
+    if (this.warCooldown > 0) this.warCooldown--;
+
     if (!this.warTarget) {
+      if (this.warCooldown > 0) return;
       let agg = 0;
       let n = 0;
       for (const h of world.humans) {
         if (h.alive && h.kingdom === this) { agg += h.genes.agg; n++; }
       }
       const meanAgg = n ? agg / n : 0.5;
-      if (chance(CONFIG.WAR_DECLARE_CHANCE * Math.max(this.population, 1) * 0.2 * (0.5 + meanAgg))) {
-        const enemies = world.kingdoms.filter((k) => k !== this && k.population > 0);
+      // Cap the population multiplier so a single big kingdom doesn't
+      // keep the entire map in permanent war.
+      const popFactor = Math.min(this.population, 20);
+      if (chance(CONFIG.WAR_DECLARE_CHANCE * popFactor * 0.2 * (0.5 + meanAgg))) {
+        const enemies = world.kingdoms.filter((k) => k !== this && k.population > 0 && k.warCooldown <= 0 && !k.warTarget);
         if (enemies.length) {
           const enemy = pick(enemies);
           this.warTarget = enemy;
@@ -751,6 +781,8 @@ export class Kingdom {
         const dead = this.warTarget;
         this.warTarget = null;
         dead.warTarget = null;
+        this.warCooldown = CONFIG.WAR_COOLDOWN_TICKS;
+        dead.warCooldown = CONFIG.WAR_COOLDOWN_TICKS;
       } else if (chance(CONFIG.WAR_END_CHANCE)) {
         world.eventLog.push({
           tick: world.tick,
@@ -760,6 +792,8 @@ export class Kingdom {
         const enemy = this.warTarget;
         this.warTarget = null;
         if (enemy.warTarget === this) enemy.warTarget = null;
+        this.warCooldown = CONFIG.WAR_COOLDOWN_TICKS;
+        enemy.warCooldown = CONFIG.WAR_COOLDOWN_TICKS;
       }
     }
   }
